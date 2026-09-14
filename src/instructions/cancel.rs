@@ -7,19 +7,8 @@ use pinocchio_pubkey::derive_address;
 
 use crate::state::Escrow;
 
-pub fn process_cancel_instruction(
-    accounts: &mut [AccountView],
-    _data: &[u8],
-) -> ProgramResult {
-    let [
-        maker,
-        mint_a,
-        escrow_account,
-        vault,
-        maker_ata_a,
-        _token_program,
-    ] = accounts
-    else {
+pub fn process_cancel_instruction(accounts: &mut [AccountView], _data: &[u8]) -> ProgramResult {
+    let [maker, mint_a, escrow_account, vault, maker_ata_a, _token_program] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
@@ -75,10 +64,7 @@ pub fn process_cancel_instruction(
     // 5. Validate vault and get its balance.
     // ------------------------------------------------------------
     let vault_amount = {
-        let vault_state =
-            pinocchio_token::state::Account::from_account_view(
-                vault,
-            )?;
+        let vault_state = pinocchio_token::state::Account::from_account_view(vault)?;
 
         if vault_state.owner() != escrow_account.address() {
             return Err(ProgramError::IllegalOwner);
@@ -95,10 +81,7 @@ pub fn process_cancel_instruction(
     // 6. Validate maker's Mint A token account.
     // ------------------------------------------------------------
     {
-        let maker_ata_a_state =
-            pinocchio_token::state::Account::from_account_view(
-                maker_ata_a,
-            )?;
+        let maker_ata_a_state = pinocchio_token::state::Account::from_account_view(maker_ata_a)?;
 
         if maker_ata_a_state.owner() != maker.address() {
             return Err(ProgramError::IllegalOwner);
@@ -146,9 +129,7 @@ pub fn process_cancel_instruction(
     // ------------------------------------------------------------
     // 10. Return escrow rent and close escrow.
     // ------------------------------------------------------------
-    maker.set_lamports(
-        maker.lamports() + escrow_account.lamports()
-    );
+    maker.set_lamports(maker.lamports() + escrow_account.lamports());
 
     escrow_account.set_lamports(0);
 
