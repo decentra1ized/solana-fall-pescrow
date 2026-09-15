@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pescrow · Pinocchio Escrow</title>
+<meta name="description" content="Make, Take and Cancel for a native Rust Pinocchio escrow, with a simulator that runs the same checks as the program.">
+<style>
+:root{--bg:#0f1210;--panel:#171c19;--line:#2a322d;--ink:#e8ede9;--mute:#8c978f;--green:#3ddc97;--amber:#f5b041;--red:#ff6b6b;--mono:ui-monospace,SFMono-Regular,Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,Segoe UI,sans-serif;padding-inline:16px}
+main{max-width:1040px;margin:0 auto;padding-block:40px 80px}
+a{color:var(--green)}
+h1{font-size:clamp(28px,5vw,44px);line-height:1.1;margin:.2em 0}
+h2{font-size:20px;margin:48px 0 12px;border-top:1px solid var(--line);padding-top:28px}
+.eyebrow{font:12px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--amber)}
+.lede{color:var(--mute);max-width:680px}
+.links{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+.links a{border:1px solid var(--line);padding:6px 12px;border-radius:6px;text-decoration:none;font:13px var(--mono)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+.card h3{margin:0 0 8px;font-size:15px}
+.stat{font:600 28px var(--mono)}
+.mute{color:var(--mute)}
+code,.mono{font-family:var(--mono);font-size:13px}
+.tbl{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--mute);font-weight:500}
+.ok{color:var(--green)}.bad{color:var(--red)}
+.wallets{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.w b{display:block;margin-bottom:4px}
+.w div{font:13px var(--mono)}
+.controls{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
+button{background:#232a26;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:8px 12px;font:13px var(--mono);cursor:pointer}
+button:hover{border-color:var(--green)}
+button.primary{background:var(--green);color:#06140d;border-color:var(--green)}
+button.danger{border-color:#5a2a2a}
+label{font-size:13px;color:var(--mute)}
+input[type=number]{width:90px;background:#0b0e0c;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px}
+#log{background:#0b0e0c;border:1px solid var(--line);border-radius:8px;padding:12px;font:12.5px/1.6 var(--mono);height:260px;overflow:auto;white-space:pre-wrap}
+.pill{display:inline-block;padding:1px 8px;border-radius:99px;font:12px var(--mono);border:1px solid var(--line)}
+pre{background:#0b0e0c;border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;font:12.5px/1.5 var(--mono)}
+</style>
+</head>
+<body>
+<main>
+<div class="eyebrow">Solana Fall School · Week 3 Day 1 · Homework</div>
+<h1>Pescrow: the escrow, finished</h1>
+<p class="lede">A native Rust escrow written with <b>Pinocchio 0.11</b>: manual account validation, PDA derivation, zero-copy state, raw CPIs. <code>Make</code> was already there; this fork adds <code>Take</code> and <code>Cancel</code>, and proves them with LiteSVM tests.</p>
+<div class="links">
+  <a href="https://github.com/decentra1ized/solana-fall-pescrow/pull/7">Pull request</a>
+  <a href="https://github.com/bryankwandou/solana-fall-pescrow">Fork</a>
+  <a href="https://github.com/bryankwandou/solana-fall-pescrow/blob/finish-take-cancel/src/instructions/take.rs">take.rs</a>
+  <a href="https://github.com/bryankwandou/solana-fall-pescrow/blob/finish-take-cancel/src/instructions/cancel.rs">cancel.rs</a>
+  <a href="https://github.com/bryankwandou/solana-fall-pescrow/blob/finish-take-cancel/src/instructions/shared.rs">shared.rs</a>
+</div>
+
+<h2>Test results (cargo build-sbf → cargo test)</h2>
+<div class="grid" id="cu"></div>
+<div class="tbl" style="margin-top:14px"><table id="tests"><thead><tr><th>Test</th><th>Expect</th><th>Result</th><th>What it proves</th></tr></thead><tbody></tbody></table></div>
+
+<h2>Try it: escrow simulator</h2>
+<p class="mute">This runs in your browser. It applies the program's checks in the same order (signer, owner, stored maker and mints, PDA, token accounts, then the CPIs), so you can see where each attack gets stopped. It is a model of the program, not a devnet transaction.</p>
+<div class="wallets" id="wallets"></div>
+<div class="controls">
+  <label>Bob holds <input type="number" id="bobB" value="100" min="0"> B</label>
+  <button class="primary" id="bMake">Make (Alice: 500 A for 100 B)</button>
+  <button id="bTake">Take (Bob signs)</button>
+  <button id="bCancel">Cancel (Alice signs)</button>
+</div>
+<div class="controls">
+  <button class="danger" id="bStranger">Attack: Mallory cancels</button>
+  <button class="danger" id="bUnsigned">Attack: Cancel without Alice's signature</button>
+  <button class="danger" id="bFakeMaker">Attack: Take with wrong maker</button>
+  <button class="danger" id="bMakeV2">Send discriminator 3 (MakeV2)</button>
+  <button id="bReset">Reset</button>
+</div>
+<div id="log"></div>
+
+<h2>Account order is the API</h2>
+<div class="grid">
+<div class="card"><h3>Take <span class="pill">discriminator 1</span></h3><div class="tbl"><table>
+<tr><th>#</th><th>Account</th><th>W</th><th>S</th></tr>
+<tr><td>0</td><td>taker</td><td>✓</td><td>✓</td></tr><tr><td>1</td><td>maker</td><td>✓</td><td></td></tr>
+<tr><td>2</td><td>mint_a</td><td></td><td></td></tr><tr><td>3</td><td>mint_b</td><td></td><td></td></tr>
+<tr><td>4</td><td>escrow_account</td><td>✓</td><td></td></tr><tr><td>5</td><td>vault</td><td>✓</td><td></td></tr>
+<tr><td>6</td><td>taker_ata_a</td><td>✓</td><td></td></tr><tr><td>7</td><td>taker_ata_b</td><td>✓</td><td></td></tr>
+<tr><td>8</td><td>maker_ata_b</td><td>✓</td><td></td></tr><tr><td>9</td><td>system_program</td><td></td><td></td></tr>
+<tr><td>10</td><td>token_program</td><td></td><td></td></tr><tr><td>11</td><td>associated_token_program</td><td></td><td></td></tr>
+</table></div></div>
+<div class="card"><h3>Cancel <span class="pill">discriminator 2</span></h3><div class="tbl"><table>
+<tr><th>#</th><th>Account</th><th>W</th><th>S</th></tr>
+<tr><td>0</td><td>maker</td><td>✓</td><td>✓</td></tr><tr><td>1</td><td>mint_a</td><td></td><td></td></tr>
+<tr><td>2</td><td>escrow_account</td><td>✓</td><td></td></tr><tr><td>3</td><td>vault</td><td>✓</td><td></td></tr>
+<tr><td>4</td><td>maker_ata_a</td><td>✓</td><td></td></tr><tr><td>5</td><td>token_program</td><td></td><td></td></tr>
+</table></div>
+<p class="mute" style="margin-top:12px">Both end in the shared helper <code>drain_vault_and_close</code>: transfer the vault out (PDA-signed), <code>CloseAccount</code> the vault (PDA-signed), move the escrow's lamports to the maker, then <code>close()</code>.</p></div>
+</div>
+
+<h2>The check that matters most</h2>
+<pre>// cancel.rs
+if !maker.is_signer() {                       // who sent it
+    return Err(ProgramError::MissingRequiredSignature);
+}
+if !escrow_account.owned_by(&crate::ID) { .. } // real escrow, not a forgery
+let bump = {
+    let escrow = Escrow::load_mut(escrow_account)?;
+    if escrow.maker()  != *maker.address()  { return Err(InvalidAccountData) } // right signer for this escrow
+    if escrow.mint_a() != *mint_a.address() { return Err(InvalidAccountData) }
+    escrow.bump
+};                                             // RefMut dropped before any CPI
+verify_escrow_pda(escrow_account, maker, bump)?; // derive_address, one hash</pre>
+</main>
+
+<script>
+// Filled from the real `cargo test -- --nocapture` run.
+const RESULTS = {
+  cu: { "Make": 31288, "Take": 69937, "Cancel": 10433 },
+  tests: [
+    {name:"test_make_instruction", expect:"success", pass:true, proves:"vault 500 A, maker 500 A, escrow bytes + canonical bump"},
+    {name:"test_take_instruction", expect:"success", pass:true, proves:"taker +500 A, maker +100 B, vault & escrow closed, maker SOL +3,716,640 (both rents exactly)"},
+    {name:"test_cancel_instruction", expect:"success", pass:true, proves:"maker back to 1,000 A, both accounts closed, rent refunded"},
+    {name:"test_take_fails_when_taker_underfunded", expect:"tx Err", pass:true, proves:"50 B taker rejected by token program (Custom(1)); vault still 500 A"},
+    {name:"test_cancel_fails_for_stranger", expect:"tx Err", pass:true, proves:"stranger → InvalidAccountData; unsigned maker → MissingRequiredSignature; vault still 500 A"},
+    {name:"test_take_fails_with_mismatched_maker", expect:"tx Err", pass:true, proves:"wrong maker rejected at the state cross-check (204 CU), nothing moved"}
+  ]
+};
+
+const cu = document.getElementById('cu');
+for (const [k,v] of Object.entries(RESULTS.cu)) {
+  cu.insertAdjacentHTML('beforeend', `<div class="card"><h3>${k}</h3><div class="stat">${v.toLocaleString('en-US')}</div><div class="mute">compute units</div></div>`);
+}
+const tb = document.querySelector('#tests tbody');
+for (const t of RESULTS.tests) {
+  tb.insertAdjacentHTML('beforeend', `<tr><td class="mono">${t.name}</td><td>${t.expect}</td><td class="${t.pass?'ok':'bad'}">${t.pass?'✓ pass':'✗ fail'}</td><td>${t.proves}</td></tr>`);
+}
+
+// ---------------- simulator ----------------
+const PROGRAM = 'pescrow';
+let S;
+function reset(){
+  S = { accounts:{
+    alice:{lamports:10_000, owner:'system'}, bob:{lamports:10_000, owner:'system'}, mallory:{lamports:10_000, owner:'system'},
+  }, tokens:{ 'alice:A':1000, 'bob:B':+document.getElementById('bobB').value, 'mallory:A':0 }, escrow:null, vault:null };
+  document.getElementById('log').textContent='';
+  log('Ready. Alice has 1,000 A. Bob has '+S.tokens['bob:B']+' B.');
+  render();
+}
+function log(s,cls){ const el=document.getElementById('log'); el.textContent += s+'\n'; el.scrollTop=el.scrollHeight; }
+const RENT_ESCROW=2_000, RENT_ATA=2_000;
+function bal(k){ return S.tokens[k] ?? null; }
+function render(){
+  const w=document.getElementById('wallets'); const t=S.tokens;
+  const row=(n,lines)=>`<div class="card w"><b>${n}</b>${lines.map(l=>`<div>${l}</div>`).join('')}</div>`;
+  w.innerHTML = row('Alice · maker',[`A: ${t['alice:A']??'-'}`,`B: ${t['alice:B']??'no ATA'}`,`SOL units: ${S.accounts.alice.lamports}`])
+   + row('Bob · taker',[`A: ${t['bob:A']??'no ATA'}`,`B: ${t['bob:B']??'-'}`,`SOL units: ${S.accounts.bob.lamports}`])
+   + row('Escrow PDA ["escrow", alice]', S.escrow?[`owner: ${PROGRAM}`,`wants ${S.escrow.receive} B`,`bump: ${S.escrow.bump}`]:['closed / not created'])
+   + row('Vault ATA(escrow, A)', S.vault!==null?[`A: ${S.vault}`,'authority: escrow PDA']:['closed / not created']);
+}
+class Fail extends Error{}
+function req(cond,err){ if(!cond) throw new Fail(err); }
+
+function run(name, fn){
+  const snap = structuredClone(S);
+  try { fn(); log('✓ '+name+' succeeded'); }
+  catch(e){ S = snap; if(!(e instanceof Fail)) throw e; log('✗ '+name+' rejected: '+e.message+'  (state rolled back, nothing moved)'); }
+  render();
+}
+
+function make(){ run('Make', ()=>{
+  req(!S.escrow,'AccountAlreadyInitialized: escrow for this maker exists');
+  req(bal('alice:A')>=500,'token program: insufficient funds');
+  S.escrow={maker:'alice',mintA:'A',mintB:'B',receive:100,give:500,bump:254};
+  S.accounts.alice.lamports -= RENT_ESCROW + RENT_ATA;
+  S.vault=0; S.tokens['alice:A']-=500; S.vault+=500;
+  log('  CPI CreateAccount (PDA-signed) → CPI ATA Create → CPI Transfer 500 A');
+});}
+
+// same order as take.rs
+function take({taker='bob', makerAcc='alice', takerSigns=true}={}){ run(`Take by ${taker}`, ()=>{
+  req(takerSigns,'MissingRequiredSignature: taker did not sign');
+  req(S.escrow,'InvalidAccountOwner: escrow is not owned by the program');
+  req(S.escrow.maker===makerAcc,`InvalidAccountData: escrow.maker() is alice, got ${makerAcc}`);
+  log('  derive_address(["escrow", maker, bump]) == escrow ✓');
+  if(S.tokens[taker+':A']==null){ S.tokens[taker+':A']=0; S.accounts[taker].lamports-=RENT_ATA; log('  CreateIdempotent taker_ata_a'); }
+  if(S.tokens['alice:B']==null){ S.tokens['alice:B']=0; S.accounts[taker].lamports-=RENT_ATA; log('  CreateIdempotent maker_ata_b'); }
+  req(bal(taker+':B')!=null,'IllegalOwner: taker_ata_b invalid');
+  req(bal(taker+':B')>=S.escrow.receive,`token program: insufficient funds (has ${bal(taker+':B')} B, price ${S.escrow.receive} B)`);
+  S.tokens[taker+':B']-=S.escrow.receive; S.tokens['alice:B']+=S.escrow.receive; log('  CPI #1 Transfer '+S.escrow.receive+' B taker → maker');
+  drain(taker+':A');
+});}
+
+function cancel({signer='alice', makerAcc=signer, signs=true, dest=makerAcc+':A'}={}){ run(`Cancel sent by ${signer}`, ()=>{
+  req(signs && signer===makerAcc,'MissingRequiredSignature: maker did not sign');
+  req(S.escrow,'InvalidAccountOwner: escrow is not owned by the program');
+  req(S.escrow.maker===makerAcc,`InvalidAccountData: escrow.maker() is alice, got ${makerAcc}`);
+  log('  derive_address(["escrow", maker, bump]) == escrow ✓');
+  req(dest==='alice:A','IllegalOwner: destination ATA is not owned by the maker');
+  drain('alice:A');
+});}
+
+function drain(dest){
+  const amt=S.vault; S.tokens[dest]+=amt; log(`  CPI Transfer ${amt} A vault → ${dest.split(':')[0]} (PDA-signed)`);
+  S.vault=null; S.accounts.alice.lamports+=RENT_ATA; log('  CPI CloseAccount vault → rent to maker (PDA-signed)');
+  S.escrow=null; S.accounts.alice.lamports+=RENT_ESCROW; log('  escrow lamports → maker, set_lamports(0), close()');
+}
+
+document.getElementById('bMake').onclick=make;
+document.getElementById('bTake').onclick=()=>{ S.tokens['bob:B']=S.tokens['bob:B']; take(); };
+document.getElementById('bCancel').onclick=()=>cancel();
+document.getElementById('bStranger').onclick=()=>cancel({signer:'mallory', makerAcc:'mallory', dest:'mallory:A'});
+document.getElementById('bUnsigned').onclick=()=>cancel({signer:'mallory', makerAcc:'alice', signs:false});
+document.getElementById('bFakeMaker').onclick=()=>take({makerAcc:'mallory'});
+document.getElementById('bMakeV2').onclick=()=>log('✗ discriminator 3 rejected: InvalidInstructionData (MakeV2 has an explicit arm, no catch-all)');
+document.getElementById('bReset').onclick=reset;
+document.getElementById('bobB').onchange=reset;
+reset();
+</script>
+</body>
+</html>
