@@ -70,7 +70,10 @@ mod tests {
         maker_ata_a: Pubkey,
         escrow: Pubkey,
         vault: Pubkey,
-        bump: u8,
+        // No `bump`. The guide's sketch returns one, but nothing here needs it:
+        // the program re-derives its own from state, and the shipped Make test
+        // already asserts the stored byte. Carrying it only to match the sketch
+        // would be an unused field.
     }
 
     fn associated_token_program() -> Pubkey {
@@ -96,7 +99,7 @@ mod tests {
             .owner(&maker.pubkey()).send().unwrap();
         MintTo::new(&mut svm, &maker, &mint_a, &maker_ata_a, MAKER_START_A).send().unwrap();
 
-        let (escrow, bump) = Pubkey::find_program_address(
+        let (escrow, _bump) = Pubkey::find_program_address(
             &[b"escrow".as_ref(), maker.pubkey().as_ref()], &program_id);
         let vault = spl_associated_token_account::get_associated_token_address(&escrow, &mint_a);
 
@@ -127,7 +130,7 @@ mod tests {
         let tx = svm.send_transaction(Transaction::new(&[&maker], message, blockhash)).unwrap();
         println!("Make CUs Consumed: {}", tx.compute_units_consumed);
 
-        Escrowed { svm, maker, mint_a, mint_b, maker_ata_a, escrow, vault, bump }
+        Escrowed { svm, maker, mint_a, mint_b, maker_ata_a, escrow, vault }
     }
 
     fn token_amount(svm: &LiteSVM, ata: &Pubkey) -> u64 {
