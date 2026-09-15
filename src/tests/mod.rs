@@ -408,8 +408,10 @@ mod tests {
         let message = Message::new(&[ix], Some(&taker.pubkey()));
         let blockhash = svm.latest_blockhash();
         let res = svm.send_transaction(Transaction::new(&[&taker], message, blockhash));
-        assert!(res.is_err(), "a taker holding 50 B must not be able to take a 100 B deal");
-        println!("Underfunded Take rejected: {:?}", res.err().map(|e| e.err));
+        let err = res.expect_err("a taker holding 50 B must not be able to take a 100 B deal");
+        // A rejected transaction still burns what it ran before failing.
+        println!("Underfunded Take CUs Consumed: {}", err.meta.compute_units_consumed);
+        println!("Underfunded Take rejected: {:?}", err.err);
 
         assert_eq!(token_amount(&svm, &vault), AMOUNT_TO_GIVE, "the vault must be untouched");
         assert_eq!(token_amount(&svm, &taker_ata_b), 50_000_000, "the taker's B must be untouched");
@@ -464,6 +466,7 @@ mod tests {
         let rendered = format!("{:?}", err.err);
         assert!(rendered.contains("MissingRequiredSignature"),
             "expected the signer check to reject this, got: {rendered}");
+        println!("Unsigned-maker Cancel CUs Consumed: {}", err.meta.compute_units_consumed);
         println!("Unsigned-maker Cancel rejected: {rendered}");
 
         // 2 — the stranger as the maker, paying themselves.
@@ -486,6 +489,7 @@ mod tests {
         let rendered = format!("{:?}", err.err);
         assert!(rendered.contains("InvalidAccountData"),
             "expected the stored-maker check to reject this first, got: {rendered}");
+        println!("Stranger-as-maker Cancel CUs Consumed: {}", err.meta.compute_units_consumed);
         println!("Stranger-as-maker Cancel rejected: {rendered}");
 
         // Neither attempt moved anything.
