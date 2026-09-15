@@ -180,6 +180,8 @@ mod tests {
     pub fn test_take_instruction() {
         let (mut svm, maker) = setup();
         let program_id = program_id();
+        println!("Starting Take test");
+        println!("Maker: {}", maker.pubkey());
         let system_program = solana_sdk_ids::system_program::ID;
         let token_program = TOKEN_PROGRAM_ID;
         let associated_token_program = ASSOCIATED_TOKEN_PROGRAM_ID.parse::<Pubkey>().unwrap();
@@ -194,20 +196,26 @@ mod tests {
             .authority(&maker.pubkey())
             .send()
             .unwrap();
+        println!("Mint A: {}", mint_a);
+        println!("Mint B: {}", mint_b);
 
         let maker_ata_a = CreateAssociatedTokenAccount::new(&mut svm, &maker, &mint_a)
             .owner(&maker.pubkey())
             .send()
             .unwrap();
+        println!("Maker ATA A: {}", maker_ata_a);
         MintTo::new(&mut svm, &maker, &mint_a, &maker_ata_a, 1_000_000_000)
             .send()
             .unwrap();
+        println!("Minted 1,000,000,000 A to maker");
 
         let (escrow, bump) = Pubkey::find_program_address(
             &[b"escrow", maker.pubkey().as_ref()],
             &program_id,
         );
         let vault = spl_associated_token_account::get_associated_token_address(&escrow, &mint_a);
+        println!("Escrow PDA: {} (bump {})", escrow, bump);
+        println!("Vault: {}", vault);
 
         let make_data = [
             vec![0u8],
@@ -237,10 +245,13 @@ mod tests {
             svm.latest_blockhash(),
         ))
         .unwrap();
+        println!("Make transaction successful");
 
         let maker_lamports_before_take = svm.get_account(&maker.pubkey()).unwrap().lamports;
+        println!("Maker lamports before Take: {}", maker_lamports_before_take);
         let taker = Keypair::new();
         svm.airdrop(&taker.pubkey(), 2 * LAMPORTS_PER_SOL).unwrap();
+        println!("Taker: {}", taker.pubkey());
 
         let taker_ata_b = CreateAssociatedTokenAccount::new(&mut svm, &maker, &mint_b)
             .owner(&taker.pubkey())
@@ -249,11 +260,15 @@ mod tests {
         MintTo::new(&mut svm, &maker, &mint_b, &taker_ata_b, 100_000_000)
             .send()
             .unwrap();
+        println!("Taker ATA B: {}", taker_ata_b);
+        println!("Minted 100,000,000 B to taker");
 
         let taker_ata_a =
             spl_associated_token_account::get_associated_token_address(&taker.pubkey(), &mint_a);
         let maker_ata_b =
             spl_associated_token_account::get_associated_token_address(&maker.pubkey(), &mint_b);
+        println!("Taker ATA A (created by Take): {}", taker_ata_a);
+        println!("Maker ATA B (created by Take): {}", maker_ata_b);
 
         let take_ix = Instruction {
             program_id,
@@ -284,23 +299,32 @@ mod tests {
 
         let taker_a = svm.get_account(&taker_ata_a).unwrap();
         let taker_a_state = spl_token_2022::state::Account::unpack(&taker_a.data).unwrap();
+        println!("Taker ATA A balance: {}", taker_a_state.amount);
         assert_eq!(taker_a_state.amount, 500_000_000);
 
         let maker_b = svm.get_account(&maker_ata_b).unwrap();
         let maker_b_state = spl_token_2022::state::Account::unpack(&maker_b.data).unwrap();
+        println!("Maker ATA B balance: {}", maker_b_state.amount);
         assert_eq!(maker_b_state.amount, 100_000_000);
 
         let vault_after = svm.get_account(&vault);
-        assert!(vault_after.is_none_or(|account| {
+        assert!(vault_after.as_ref().is_none_or(|account| {
             account.lamports == 0 && account.owner == system_program && account.data.is_empty()
         }));
 
         let escrow_after = svm.get_account(&escrow);
-        assert!(escrow_after.is_none_or(|account| {
+        assert!(escrow_after.as_ref().is_none_or(|account| {
             account.lamports == 0 && account.owner == system_program && account.data.is_empty()
         }));
+        println!("Vault closed: {}", vault_after.is_none());
+        println!("Escrow closed: {}", escrow_after.is_none());
 
         let maker_lamports_after_take = svm.get_account(&maker.pubkey()).unwrap().lamports;
+        println!("Maker lamports after Take: {}", maker_lamports_after_take);
+        println!(
+            "Maker lamports refunded: {}",
+            maker_lamports_after_take - maker_lamports_before_take
+        );
         assert!(maker_lamports_after_take > maker_lamports_before_take);
         assert_eq!(bump, Pubkey::find_program_address(&[b"escrow", maker.pubkey().as_ref()], &program_id).1);
     }

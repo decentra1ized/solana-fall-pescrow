@@ -7,7 +7,7 @@ use crate::state::Escrow;
 
 pub fn process_take_instruction(
     accounts: &mut [AccountView],
-    data: &[u8],
+    _data: &[u8],
 ) -> ProgramResult {
     let [
         taker,
