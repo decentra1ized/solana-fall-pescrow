@@ -1,5 +1,8 @@
 use pinocchio::{
-    AccountView, Address, ProgramResult, cpi::{Seed, Signer}, error::ProgramError, sysvars::{Sysvar, rent::Rent}
+    cpi::{Seed, Signer},
+    error::ProgramError,
+    sysvars::{rent::Rent, Sysvar},
+    AccountView, Address, ProgramResult,
 };
 use pinocchio_system::instructions::CreateAccount;
 
@@ -8,22 +11,10 @@ use crate::state::Escrow;
 /// 8 (amount_to_receive) + 8 (amount_to_give)
 const MAKE_DATA_LEN: usize = 16;
 
-pub fn process_make_instruction(
-    accounts: &mut [AccountView],
-    data: &[u8],
-) -> ProgramResult {
-
-    let [
-        maker,
-        mint_a,
-        mint_b,
-        escrow_account,
-        maker_ata,
-        escrow_ata,
-        system_program,
-        token_program,
-        _associated_token_program@ ..
-    ] = accounts else {
+pub fn process_make_instruction(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
+    let [maker, mint_a, mint_b, escrow_account, maker_ata, escrow_ata, system_program, token_program, _associated_token_program @ ..] =
+        accounts
+    else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
@@ -57,13 +48,18 @@ pub fn process_make_instruction(
     // This costs a few thousand CU once, at init. Take and Cancel will use the stored bump
     // with derive_address (a single hash) instead.
     let (escrow_account_pda, bump) =
-        Address::find_program_address(&[b"escrow", maker.address().as_ref()], &crate::ID);
+        Address::derive_program_address(&[b"escrow", maker.address().as_ref()], &crate::ID)
+            .ok_or(ProgramError::InvalidSeeds)?;
     if escrow_account_pda != *escrow_account.address() {
         return Err(ProgramError::InvalidSeeds);
     }
 
     let bump_bytes = [bump];
-    let seed = [Seed::from(b"escrow"), Seed::from(maker.address().as_array()), Seed::from(&bump_bytes)];
+    let seed = [
+        Seed::from(b"escrow"),
+        Seed::from(maker.address().as_array()),
+        Seed::from(&bump_bytes),
+    ];
     let seeds = Signer::from(&seed);
 
     // Refuse to overwrite an escrow that already exists for this maker.
@@ -77,7 +73,8 @@ pub fn process_make_instruction(
         lamports: Rent::get()?.try_minimum_balance(Escrow::LEN)?,
         space: Escrow::LEN as u64,
         owner: &crate::ID,
-    }.invoke_signed(&[seeds.clone()])?;
+    }
+    .invoke_signed(&[seeds.clone()])?;
 
     // Scoped so the mutable borrow on the escrow data is released before the CPIs below.
     {
@@ -97,7 +94,8 @@ pub fn process_make_instruction(
         mint: mint_a,
         token_program: token_program,
         system_program: system_program,
-    }.invoke()?;
+    }
+    .invoke()?;
 
     pinocchio_token::instructions::Transfer {
         from: maker_ata,
@@ -105,7 +103,8 @@ pub fn process_make_instruction(
         authority: maker,
         multisig_signers: &[] as &[&AccountView],
         amount: amount_to_give,
-    }.invoke()?;
+    }
+    .invoke()?;
 
     Ok(())
 }
