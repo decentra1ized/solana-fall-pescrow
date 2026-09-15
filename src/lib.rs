@@ -26,8 +26,13 @@ pub fn process_instruction(
 
     match EscrowInstructions::try_from(discriminator)? {
         EscrowInstructions::Make => instructions::process_make_instruction(accounts, data)?,
-        // TODO (challenge): EscrowInstructions::Take and EscrowInstructions::Cancel
-        _ => return Err(ProgramError::InvalidInstructionData),
+        EscrowInstructions::Take => instructions::process_take_instruction(accounts, data)?,
+        EscrowInstructions::Cancel => instructions::process_cancel_instruction(accounts, data)?,
+        // MakeV2 is reserved in the enum but not implemented. Named rather than left
+        // to a `_` arm on purpose: with no catch-all here, the next variant anyone
+        // adds to `EscrowInstructions` fails to compile at this match instead of
+        // quietly routing itself into an error.
+        EscrowInstructions::MakeV2 => return Err(ProgramError::InvalidInstructionData),
     }
     Ok(())
 }
