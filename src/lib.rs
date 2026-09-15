@@ -9,7 +9,7 @@ mod instructions;
 
 entrypoint!(process_instruction);
 
-declare_id!("4ibrEMW5F6hKnkW4jVedswYv6H6VtwPN6ar6dvXDN1nT");
+declare_id!("29eCn3KRBeWL5fYUHPKVHJzKW6Uc8VFbJsR9f7RyTKBp");
 
 pub fn process_instruction(
     program_id: &Address,
@@ -26,8 +26,9 @@ pub fn process_instruction(
 
     match EscrowInstructions::try_from(discriminator)? {
         EscrowInstructions::Make => instructions::process_make_instruction(accounts, data)?,
-        // TODO (challenge): EscrowInstructions::Take and EscrowInstructions::Cancel
-        _ => return Err(ProgramError::InvalidInstructionData),
+        EscrowInstructions::Take => instructions::process_take_instruction(accounts)?,
+        EscrowInstructions::Cancel => instructions::process_cancel_instruction(accounts)?,
+        EscrowInstructions::MakeV2 => return Err(ProgramError::InvalidInstructionData),
     }
     Ok(())
 }
