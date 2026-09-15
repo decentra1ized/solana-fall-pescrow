@@ -37,7 +37,7 @@ pub fn process_take_instruction(
         maker_ata_b,
         system_program,
         token_program,
-        associated_token_program,
+        _associated_token_program,
     ] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };

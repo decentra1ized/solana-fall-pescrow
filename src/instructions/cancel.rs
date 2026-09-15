@@ -25,7 +25,7 @@ pub fn process_cancel_instruction(
         escrow_account,
         vault,
         maker_ata_a,
-        token_program,
+        _token_program,
     ] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
