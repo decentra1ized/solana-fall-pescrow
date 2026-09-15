@@ -25,9 +25,11 @@ pub fn process_instruction(
         .ok_or(ProgramError::InvalidInstructionData)?;
 
     match EscrowInstructions::try_from(discriminator)? {
-        EscrowInstructions::Make => instructions::process_make_instruction(accounts, data)?,
-        // TODO (challenge): EscrowInstructions::Take and EscrowInstructions::Cancel
-        _ => return Err(ProgramError::InvalidInstructionData),
+        EscrowInstructions::Make => instructions::make::process_make_instruction(accounts, data)?,
+        EscrowInstructions::Take => instructions::take::process_take_instruction(accounts, data)?,
+        EscrowInstructions::Cancel => instructions::cancel::process_cancel_instruction(accounts, data)?,
+        // MakeV2 is reserved in the enum but not implemented: reject it explicitly.
+        EscrowInstructions::MakeV2 => return Err(ProgramError::InvalidInstructionData),
     }
     Ok(())
 }
