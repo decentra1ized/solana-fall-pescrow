@@ -26,8 +26,11 @@ pub fn process_instruction(
 
     match EscrowInstructions::try_from(discriminator)? {
         EscrowInstructions::Make => instructions::process_make_instruction(accounts, data)?,
-        // TODO (challenge): EscrowInstructions::Take and EscrowInstructions::Cancel
-        _ => return Err(ProgramError::InvalidInstructionData),
+        EscrowInstructions::Take => instructions::process_take_instruction(accounts)?,
+        EscrowInstructions::Cancel => instructions::process_cancel_instruction(accounts)?,
+        // Reserved, not implemented yet: reject it by name rather than letting a
+        // catch-all arm hide a future instruction that was never wired up.
+        EscrowInstructions::MakeV2 => return Err(ProgramError::InvalidInstructionData),
     }
     Ok(())
 }
