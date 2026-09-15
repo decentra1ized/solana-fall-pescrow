@@ -1,15 +1,13 @@
 use pinocchio::{
     cpi::{Seed, Signer},
     error::ProgramError,
-    sysvars::{rent::Rent, Sysvar},
-    AccountView, Address, ProgramResult,
+    AccountView, ProgramResult,
 };
 use pinocchio_pubkey::derive_address;
-use pinocchio_system::instructions::CreateAccount;
 
 use crate::state::Escrow;
 
-pub fn process_cancel_instruction(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
+pub fn process_cancel_instruction(accounts: &mut [AccountView], _data: &[u8]) -> ProgramResult {
     let [maker, mint_a, escrow_account, vault, maker_ata_a, token_program, _associated_token_program @ ..] =
         accounts
     else {
@@ -17,10 +15,14 @@ pub fn process_cancel_instruction(accounts: &mut [AccountView], data: &[u8]) -> 
     };
 
     if !maker.is_signer() {
-        return Err(ProgramError::InvalidAccountOwner);
+        return Err(ProgramError::MissingRequiredSignature);
     }
 
-    let (amount_to_receive, amount_to_give, bump) = {
+    if !escrow_account.owned_by(&crate::ID) {
+        return Err(ProgramError::UninitializedAccount);
+    }
+
+    let (_amount_to_give, bump) = {
         let escrow = Escrow::load_mut(escrow_account)?;
         if escrow.maker() != *maker.address() {
             return Err(ProgramError::InvalidAccountData);
@@ -28,11 +30,10 @@ pub fn process_cancel_instruction(accounts: &mut [AccountView], data: &[u8]) -> 
         if escrow.mint_a() != *mint_a.address() {
             return Err(ProgramError::InvalidAccountData);
         }
-        (
-            escrow.amount_to_receive(),
-            escrow.amount_to_give(),
-            escrow.bump,
-        )
+
+        let result = (escrow.amount_to_give(), escrow.bump);
+        drop(escrow);
+        result
     };
 
     let expected_escrow = derive_address(
@@ -53,7 +54,9 @@ pub fn process_cancel_instruction(accounts: &mut [AccountView], data: &[u8]) -> 
         if vault_state.mint() != mint_a.address() {
             return Err(ProgramError::InvalidAccountData);
         }
-        vault_state.amount()
+        let amount = vault_state.amount();
+        drop(vault_state);
+        amount
     };
 
     {
@@ -64,6 +67,7 @@ pub fn process_cancel_instruction(accounts: &mut [AccountView], data: &[u8]) -> 
         if maker_ata_a_state.mint() != mint_a.address() {
             return Err(ProgramError::InvalidAccountData);
         }
+        drop(maker_ata_a_state);
     }
 
     let bump_bytes = [bump];
@@ -90,9 +94,11 @@ pub fn process_cancel_instruction(accounts: &mut [AccountView], data: &[u8]) -> 
         multisig_signers: &[] as &[&AccountView],
     }
     .invoke_signed(std::slice::from_ref(&signer))?;
+
     maker.set_lamports(maker.lamports() + escrow_account.lamports());
     escrow_account.set_lamports(0);
     escrow_account.close()?;
 
+    let _ = token_program;
     Ok(())
 }
