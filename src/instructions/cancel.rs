@@ -1,0 +1,136 @@
+use pinocchio::{
+    cpi::{Seed, Signer},
+    error::ProgramError,
+    AccountView, ProgramResult,
+};
+use pinocchio_pubkey::derive_address;
+
+use crate::state::Escrow;
+
+pub fn process_cancel_instruction(
+    accounts: &mut [AccountView],
+    _data: &[u8],
+) -> ProgramResult {
+    let [
+        maker,
+        mint_a,
+        escrow_account,
+        vault,
+        maker_ata_a,
+        _token_program,
+    ] = accounts
+    else {
+        return Err(ProgramError::NotEnoughAccountKeys);
+    };
+
+    // only maker can cancel
+    if !maker.is_signer() {
+        return Err(ProgramError::MissingRequiredSignature);
+    }
+
+    // escrow must belong to this program
+    if !escrow_account.owned_by(&crate::ID) {
+        return Err(ProgramError::IllegalOwner);
+    }
+
+    // validate escrow state (drop refmut before CPIs)
+    let bump = {
+        let escrow = Escrow::load_mut(escrow_account)?;
+
+        if escrow.maker() != *maker.address() {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        if escrow.mint_a() != *mint_a.address() {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        escrow.bump
+    };
+
+    // Re-derive escrow PDA
+    let bump_bytes = [bump];
+
+    let expected_escrow = derive_address(
+        &[b"escrow", maker.address().as_ref(), &bump_bytes],
+        None,
+        &crate::ID.to_bytes(),
+    );
+
+    if expected_escrow != escrow_account.address().to_bytes() {
+        return Err(ProgramError::InvalidSeeds);
+    }
+
+    // validate vault and get its balance
+    let vault_amount = {
+        let vault_state =
+            pinocchio_token::state::Account::from_account_view(
+                vault,
+            )?;
+
+        if vault_state.owner() != escrow_account.address() {
+            return Err(ProgramError::IllegalOwner);
+        }
+
+        if vault_state.mint() != mint_a.address() {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
+        vault_state.amount()
+    };
+
+    // validate maker's mint A token account
+    {
+        let maker_ata_a_state =
+            pinocchio_token::state::Account::from_account_view(
+                maker_ata_a,
+            )?;
+
+        if maker_ata_a_state.owner() != maker.address() {
+            return Err(ProgramError::IllegalOwner);
+        }
+
+        if maker_ata_a_state.mint() != mint_a.address() {
+            return Err(ProgramError::InvalidAccountData);
+        }
+    }
+
+    // PDA signer
+    let seeds = [
+        Seed::from(b"escrow"),
+        Seed::from(maker.address().as_array()),
+        Seed::from(&bump_bytes),
+    ];
+
+    let signer = Signer::from(&seeds);
+
+    //Return Mint A from vault -> maker
+    pinocchio_token::instructions::Transfer {
+        from: vault,
+        to: maker_ata_a,
+        authority: escrow_account,
+        multisig_signers: &[] as &[&AccountView],
+        amount: vault_amount,
+    }
+    .invoke_signed(&[signer.clone()])?;
+
+    //close vault
+    pinocchio_token::instructions::CloseAccount {
+        account: vault,
+        destination: maker,
+        authority: escrow_account,
+        multisig_signers: &[] as &[&AccountView],
+    }
+    .invoke_signed(&[signer])?;
+
+    //return escrow rent and close escrow
+    maker.set_lamports(
+        maker.lamports() + escrow_account.lamports()
+    );
+
+    escrow_account.set_lamports(0);
+
+    escrow_account.close()?;
+
+    Ok(())
+}
