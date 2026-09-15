@@ -176,8 +176,6 @@ mod tests {
         assert_eq!(d[112], bump);
     }
 
-    // `maker_ata_a` is unused until the Cancel test lands; keep it on the fixture.
-    #[allow(dead_code)]
     /// Everything `Make` leaves behind, so `Take` / `Cancel` tests can start from a live deal.
     struct MadeEscrow {
         svm: LiteSVM,
@@ -376,6 +374,78 @@ mod tests {
         );
         println!(
             "Maker rent refund: {} lamports",
+            maker_lamports_after - maker_lamports_before
+        );
+    }
+
+    /// Account order for `Cancel`, mirroring the comment on `process_cancel_instruction`.
+    fn cancel_accounts(
+        maker: &Pubkey,
+        mint_a: &Pubkey,
+        escrow: &Pubkey,
+        vault: &Pubkey,
+        maker_ata_a: &Pubkey,
+    ) -> Vec<AccountMeta> {
+        vec![
+            AccountMeta::new(*maker, true),
+            AccountMeta::new_readonly(*mint_a, false),
+            AccountMeta::new(*escrow, false),
+            AccountMeta::new(*vault, false),
+            AccountMeta::new(*maker_ata_a, false),
+            AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
+        ]
+    }
+
+    #[test]
+    pub fn test_cancel_instruction() {
+        let MadeEscrow {
+            mut svm,
+            maker,
+            mint_a,
+            maker_ata_a,
+            escrow,
+            vault,
+            ..
+        } = make_escrow();
+
+        // The maker deposited 500 of her 1000 A; Cancel must hand all of it back.
+        assert_eq!(token_amount(&svm, &maker_ata_a), 500000000);
+
+        let maker_lamports_before = svm.get_account(&maker.pubkey()).unwrap().lamports;
+        let escrow_rent = svm.get_account(&escrow).unwrap().lamports;
+        let vault_rent = svm.get_account(&vault).unwrap().lamports;
+
+        let cancel_ix = Instruction {
+            program_id: program_id(),
+            accounts: cancel_accounts(&maker.pubkey(), &mint_a, &escrow, &vault, &maker_ata_a),
+            data: vec![2u8], // Cancel discriminator
+        };
+        let message = Message::new(&[cancel_ix], Some(&maker.pubkey()));
+        let blockhash = svm.latest_blockhash();
+        let tx = svm
+            .send_transaction(Transaction::new(&[&maker], message, blockhash))
+            .expect("Cancel failed");
+
+        println!("\n\nCancel transaction successful");
+        println!("CUs Consumed: {}", tx.compute_units_consumed);
+
+        // The full deposit is back with the maker.
+        assert_eq!(token_amount(&svm, &maker_ata_a), 1000000000);
+
+        // Both PDAs are gone, and their rent went back to the maker (less the tx fee).
+        assert!(svm.get_account(&vault).map_or(true, |a| a.lamports == 0));
+        assert!(svm
+            .get_account(&escrow)
+            .map_or(true, |a| a.lamports == 0 && a.data.is_empty()));
+
+        let maker_lamports_after = svm.get_account(&maker.pubkey()).unwrap().lamports;
+        let fee = 5000;
+        assert_eq!(
+            maker_lamports_after,
+            maker_lamports_before + escrow_rent + vault_rent - fee
+        );
+        println!(
+            "Maker rent refund (net of fee): {} lamports",
             maker_lamports_after - maker_lamports_before
         );
     }
