@@ -175,4 +175,300 @@ mod tests {
         assert_eq!(u64::from_le_bytes(d[104..112].try_into().unwrap()), amount_to_give);
         assert_eq!(d[112], bump);
     }
+
+
+    #[test]
+    pub fn test_take_instruction() {
+        let (mut svm, payer) = setup();
+        let program_id = program_id();
+        let associated_token_program = ASSOCIATED_TOKEN_PROGRAM_ID.parse::<Pubkey>().unwrap();
+        let token_program = TOKEN_PROGRAM_ID;
+        let system_program = solana_sdk_ids::system_program::ID;
+
+        let mint_a = CreateMint::new(&mut svm, &payer).decimals(6).authority(&payer.pubkey()).send().unwrap();
+        let mint_b = CreateMint::new(&mut svm, &payer).decimals(6).authority(&payer.pubkey()).send().unwrap();
+        let maker_ata_a = CreateAssociatedTokenAccount::new(&mut svm, &payer, &mint_a).owner(&payer.pubkey()).send().unwrap();
+        MintTo::new(&mut svm, &payer, &mint_a, &maker_ata_a, 1_000_000_000).send().unwrap();
+
+        let escrow = Pubkey::find_program_address(&[b"escrow".as_ref(), payer.pubkey().as_ref()], &program_id);
+        let vault = spl_associated_token_account::get_associated_token_address(&escrow.0, &mint_a);
+
+        let amount_to_receive: u64 = 100_000_000;
+        let amount_to_give: u64 = 500_000_000;
+        let make_ix = Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new(mint_a, false),
+                AccountMeta::new(mint_b, false),
+                AccountMeta::new(escrow.0, false),
+                AccountMeta::new(maker_ata_a, false),
+                AccountMeta::new(vault, false),
+                AccountMeta::new(system_program, false),
+                AccountMeta::new(token_program, false),
+                AccountMeta::new(associated_token_program, false),
+            ],
+            data: [vec![0u8], amount_to_receive.to_le_bytes().to_vec(), amount_to_give.to_le_bytes().to_vec()].concat(),
+        };
+        let make_tx = Transaction::new(
+            &[&payer],
+            Message::new(&[make_ix], Some(&payer.pubkey())),
+            svm.latest_blockhash(),
+        );
+        svm.send_transaction(make_tx).unwrap();
+
+        let taker = Keypair::new();
+        svm.airdrop(&taker.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+        let taker_ata_b = CreateAssociatedTokenAccount::new(&mut svm, &taker, &mint_b).owner(&taker.pubkey()).send().unwrap();
+        MintTo::new(&mut svm, &payer, &mint_b, &taker_ata_b, amount_to_receive).send().unwrap();
+
+        let taker_ata_a = spl_associated_token_account::get_associated_token_address(&taker.pubkey(), &mint_a);
+        let maker_ata_b = spl_associated_token_account::get_associated_token_address(&payer.pubkey(), &mint_b);
+
+        let take_ix = Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(taker.pubkey(), true),
+                AccountMeta::new(payer.pubkey(), false),
+                AccountMeta::new(mint_a, false),
+                AccountMeta::new(mint_b, false),
+                AccountMeta::new(escrow.0, false),
+                AccountMeta::new(vault, false),
+                AccountMeta::new(taker_ata_a, false),
+                AccountMeta::new(taker_ata_b, false),
+                AccountMeta::new(maker_ata_b, false),
+                AccountMeta::new(system_program, false),
+                AccountMeta::new(token_program, false),
+                AccountMeta::new(associated_token_program, false),
+            ],
+            data: vec![1u8],
+        };
+        let take_tx = Transaction::new(
+            &[&taker],
+            Message::new(&[take_ix], Some(&taker.pubkey())),
+            svm.latest_blockhash(),
+        );
+        let tx = svm.send_transaction(take_tx).unwrap();
+        println!("Take transaction successful");
+        println!("CUs Consumed: {}", tx.compute_units_consumed);
+
+        let taker_a = spl_token_2022::state::Account::unpack(&svm.get_account(&taker_ata_a).unwrap().data).unwrap();
+        assert_eq!(taker_a.amount, amount_to_give);
+        let maker_b = spl_token_2022::state::Account::unpack(&svm.get_account(&maker_ata_b).unwrap().data).unwrap();
+        assert_eq!(maker_b.amount, amount_to_receive);
+
+        let vault_after = svm.get_account(&vault);
+        assert!(vault_after.is_none() || vault_after.as_ref().unwrap().lamports == 0);
+        let escrow_after = svm.get_account(&escrow.0);
+        assert!(escrow_after.is_none() || escrow_after.as_ref().unwrap().lamports == 0);
+    }
+
+    #[test]
+    pub fn test_cancel_instruction() {
+        let (mut svm, payer) = setup();
+        let program_id = program_id();
+        let associated_token_program = ASSOCIATED_TOKEN_PROGRAM_ID.parse::<Pubkey>().unwrap();
+        let token_program = TOKEN_PROGRAM_ID;
+        let system_program = solana_sdk_ids::system_program::ID;
+
+        let mint_a = CreateMint::new(&mut svm, &payer).decimals(6).authority(&payer.pubkey()).send().unwrap();
+        let mint_b = CreateMint::new(&mut svm, &payer).decimals(6).authority(&payer.pubkey()).send().unwrap();
+        let maker_ata_a = CreateAssociatedTokenAccount::new(&mut svm, &payer, &mint_a).owner(&payer.pubkey()).send().unwrap();
+        MintTo::new(&mut svm, &payer, &mint_a, &maker_ata_a, 1_000_000_000).send().unwrap();
+
+        let escrow = Pubkey::find_program_address(&[b"escrow".as_ref(), payer.pubkey().as_ref()], &program_id);
+        let vault = spl_associated_token_account::get_associated_token_address(&escrow.0, &mint_a);
+        let amount_to_receive: u64 = 100_000_000;
+        let amount_to_give: u64 = 500_000_000;
+
+        let make_ix = Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new(mint_a, false),
+                AccountMeta::new(mint_b, false),
+                AccountMeta::new(escrow.0, false),
+                AccountMeta::new(maker_ata_a, false),
+                AccountMeta::new(vault, false),
+                AccountMeta::new(system_program, false),
+                AccountMeta::new(token_program, false),
+                AccountMeta::new(associated_token_program, false),
+            ],
+            data: [vec![0u8], amount_to_receive.to_le_bytes().to_vec(), amount_to_give.to_le_bytes().to_vec()].concat(),
+        };
+        svm.send_transaction(Transaction::new(
+            &[&payer],
+            Message::new(&[make_ix], Some(&payer.pubkey())),
+            svm.latest_blockhash(),
+        )).unwrap();
+
+        let cancel_ix = Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new(mint_a, false),
+                AccountMeta::new(escrow.0, false),
+                AccountMeta::new(vault, false),
+                AccountMeta::new(maker_ata_a, false),
+                AccountMeta::new(token_program, false),
+            ],
+            data: vec![2u8],
+        };
+        let tx = svm.send_transaction(Transaction::new(
+            &[&payer],
+            Message::new(&[cancel_ix], Some(&payer.pubkey())),
+            svm.latest_blockhash(),
+        )).unwrap();
+        println!("Cancel transaction successful");
+        println!("CUs Consumed: {}", tx.compute_units_consumed);
+
+        let maker_a = spl_token_2022::state::Account::unpack(&svm.get_account(&maker_ata_a).unwrap().data).unwrap();
+        assert_eq!(maker_a.amount, 1_000_000_000);
+        let vault_after = svm.get_account(&vault);
+        assert!(vault_after.is_none() || vault_after.as_ref().unwrap().lamports == 0);
+        let escrow_after = svm.get_account(&escrow.0);
+        assert!(escrow_after.is_none() || escrow_after.as_ref().unwrap().lamports == 0);
+    }
+
+    #[test]
+    pub fn test_take_underfunded_fails() {
+        let (mut svm, payer) = setup();
+        let program_id = program_id();
+        let associated_token_program = ASSOCIATED_TOKEN_PROGRAM_ID.parse::<Pubkey>().unwrap();
+        let token_program = TOKEN_PROGRAM_ID;
+        let system_program = solana_sdk_ids::system_program::ID;
+
+        let mint_a = CreateMint::new(&mut svm, &payer).decimals(6).authority(&payer.pubkey()).send().unwrap();
+        let mint_b = CreateMint::new(&mut svm, &payer).decimals(6).authority(&payer.pubkey()).send().unwrap();
+        let maker_ata_a = CreateAssociatedTokenAccount::new(&mut svm, &payer, &mint_a).owner(&payer.pubkey()).send().unwrap();
+        MintTo::new(&mut svm, &payer, &mint_a, &maker_ata_a, 1_000_000_000).send().unwrap();
+
+        let escrow = Pubkey::find_program_address(&[b"escrow".as_ref(), payer.pubkey().as_ref()], &program_id);
+        let vault = spl_associated_token_account::get_associated_token_address(&escrow.0, &mint_a);
+        let amount_to_receive: u64 = 100_000_000;
+        let amount_to_give: u64 = 500_000_000;
+
+        let make_ix = Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new(mint_a, false),
+                AccountMeta::new(mint_b, false),
+                AccountMeta::new(escrow.0, false),
+                AccountMeta::new(maker_ata_a, false),
+                AccountMeta::new(vault, false),
+                AccountMeta::new(system_program, false),
+                AccountMeta::new(token_program, false),
+                AccountMeta::new(associated_token_program, false),
+            ],
+            data: [vec![0u8], amount_to_receive.to_le_bytes().to_vec(), amount_to_give.to_le_bytes().to_vec()].concat(),
+        };
+        svm.send_transaction(Transaction::new(
+            &[&payer],
+            Message::new(&[make_ix], Some(&payer.pubkey())),
+            svm.latest_blockhash(),
+        )).unwrap();
+
+        let taker = Keypair::new();
+        svm.airdrop(&taker.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+        let taker_ata_b = CreateAssociatedTokenAccount::new(&mut svm, &taker, &mint_b).owner(&taker.pubkey()).send().unwrap();
+        MintTo::new(&mut svm, &payer, &mint_b, &taker_ata_b, 50_000_000).send().unwrap();
+        let taker_ata_a = spl_associated_token_account::get_associated_token_address(&taker.pubkey(), &mint_a);
+        let maker_ata_b = spl_associated_token_account::get_associated_token_address(&payer.pubkey(), &mint_b);
+
+        let take_ix = Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(taker.pubkey(), true),
+                AccountMeta::new(payer.pubkey(), false),
+                AccountMeta::new(mint_a, false),
+                AccountMeta::new(mint_b, false),
+                AccountMeta::new(escrow.0, false),
+                AccountMeta::new(vault, false),
+                AccountMeta::new(taker_ata_a, false),
+                AccountMeta::new(taker_ata_b, false),
+                AccountMeta::new(maker_ata_b, false),
+                AccountMeta::new(system_program, false),
+                AccountMeta::new(token_program, false),
+                AccountMeta::new(associated_token_program, false),
+            ],
+            data: vec![1u8],
+        };
+        let result = svm.send_transaction(Transaction::new(
+            &[&taker],
+            Message::new(&[take_ix], Some(&taker.pubkey())),
+            svm.latest_blockhash(),
+        ));
+        assert!(result.is_err(), "underfunded take must fail");
+
+        let vault_state = spl_token_2022::state::Account::unpack(&svm.get_account(&vault).unwrap().data).unwrap();
+        assert_eq!(vault_state.amount, amount_to_give);
+        println!("Underfunded Take correctly failed");
+    }
+
+    #[test]
+    pub fn test_cancel_unauthorized_fails() {
+        let (mut svm, payer) = setup();
+        let program_id = program_id();
+        let associated_token_program = ASSOCIATED_TOKEN_PROGRAM_ID.parse::<Pubkey>().unwrap();
+        let token_program = TOKEN_PROGRAM_ID;
+        let system_program = solana_sdk_ids::system_program::ID;
+
+        let mint_a = CreateMint::new(&mut svm, &payer).decimals(6).authority(&payer.pubkey()).send().unwrap();
+        let mint_b = CreateMint::new(&mut svm, &payer).decimals(6).authority(&payer.pubkey()).send().unwrap();
+        let maker_ata_a = CreateAssociatedTokenAccount::new(&mut svm, &payer, &mint_a).owner(&payer.pubkey()).send().unwrap();
+        MintTo::new(&mut svm, &payer, &mint_a, &maker_ata_a, 1_000_000_000).send().unwrap();
+
+        let escrow = Pubkey::find_program_address(&[b"escrow".as_ref(), payer.pubkey().as_ref()], &program_id);
+        let vault = spl_associated_token_account::get_associated_token_address(&escrow.0, &mint_a);
+        let amount_to_receive: u64 = 100_000_000;
+        let amount_to_give: u64 = 500_000_000;
+
+        let make_ix = Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new(mint_a, false),
+                AccountMeta::new(mint_b, false),
+                AccountMeta::new(escrow.0, false),
+                AccountMeta::new(maker_ata_a, false),
+                AccountMeta::new(vault, false),
+                AccountMeta::new(system_program, false),
+                AccountMeta::new(token_program, false),
+                AccountMeta::new(associated_token_program, false),
+            ],
+            data: [vec![0u8], amount_to_receive.to_le_bytes().to_vec(), amount_to_give.to_le_bytes().to_vec()].concat(),
+        };
+        svm.send_transaction(Transaction::new(
+            &[&payer],
+            Message::new(&[make_ix], Some(&payer.pubkey())),
+            svm.latest_blockhash(),
+        )).unwrap();
+
+        let stranger = Keypair::new();
+        svm.airdrop(&stranger.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+        let cancel_ix = Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(stranger.pubkey(), true),
+                AccountMeta::new(mint_a, false),
+                AccountMeta::new(escrow.0, false),
+                AccountMeta::new(vault, false),
+                AccountMeta::new(maker_ata_a, false),
+                AccountMeta::new(token_program, false),
+            ],
+            data: vec![2u8],
+        };
+        let result = svm.send_transaction(Transaction::new(
+            &[&stranger],
+            Message::new(&[cancel_ix], Some(&stranger.pubkey())),
+            svm.latest_blockhash(),
+        ));
+        assert!(result.is_err(), "a stranger must not be able to cancel someone else's escrow");
+
+        let vault_state = spl_token_2022::state::Account::unpack(&svm.get_account(&vault).unwrap().data).unwrap();
+        assert_eq!(vault_state.amount, amount_to_give);
+        println!("Unauthorized Cancel correctly failed");
+    }
+
 }
