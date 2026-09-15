@@ -137,6 +137,16 @@ mod tests {
         spl_token_2022::state::Account::unpack(&acc.data).unwrap().amount
     }
 
+    /// The instruction error behind a failed transaction, as a string.
+    ///
+    /// Negative tests assert on this rather than on `is_err()` alone. A bare
+    /// `is_err()` passes for any failure, so it keeps passing when the check it
+    /// is supposed to be exercising is deleted and a different one catches the
+    /// case instead.
+    fn failure_reason<T, E: std::fmt::Debug>(result: &Result<T, E>) -> String {
+        format!("{:?}", result.as_ref().err().expect("expected the transaction to fail"))
+    }
+
     /// True when an account has been closed: gone, or drained and disowned.
     fn is_closed(svm: &LiteSVM, address: &Pubkey) -> bool {
         match svm.get_account(address) {
@@ -409,7 +419,12 @@ mod tests {
         let blockhash = e.svm.latest_blockhash();
         let result = e.svm.send_transaction(Transaction::new(&[&taker], message, blockhash));
 
-        assert!(result.is_err(), "an underfunded taker must not be able to take the escrow");
+        // Custom(1) is the SPL Token program's InsufficientFunds.
+        let reason = failure_reason(&result);
+        assert!(
+            reason.contains("Custom(1)"),
+            "expected the token program to reject the underfunded transfer, got: {reason}"
+        );
 
         // The whole transaction is atomic, so nothing at all should have moved.
         assert_eq!(token_balance(&e.svm, &e.vault), AMOUNT_TO_GIVE, "vault must be untouched");
@@ -437,7 +452,14 @@ mod tests {
         let blockhash = e.svm.latest_blockhash();
         let result = e.svm.send_transaction(Transaction::new(&[&stranger], message, blockhash));
 
-        assert!(result.is_err(), "a stranger must not be able to cancel someone else's escrow");
+        // Specifically the stored-maker check, not some later guard. Without
+        // this assertion the test still passes when that check is deleted,
+        // because the PDA re-derivation catches it and returns InvalidSeeds.
+        let reason = failure_reason(&result);
+        assert!(
+            reason.contains("InvalidAccountData"),
+            "expected the stored-maker check to reject the stranger, got: {reason}"
+        );
 
         assert_eq!(token_balance(&e.svm, &e.vault), AMOUNT_TO_GIVE, "the maker's deposit must still be in the vault");
         assert!(!is_closed(&e.svm, &e.escrow), "escrow must still be open");
@@ -463,9 +485,48 @@ mod tests {
         let blockhash = e.svm.latest_blockhash();
         let result = e.svm.send_transaction(Transaction::new(&[&taker], message, blockhash));
 
-        assert!(result.is_err(), "take must reject a maker that does not match the escrow");
+        let reason = failure_reason(&result);
+        assert!(
+            reason.contains("InvalidAccountData"),
+            "expected the maker cross-check to fire before any tokens move, got: {reason}"
+        );
 
         assert_eq!(token_balance(&e.svm, &e.vault), AMOUNT_TO_GIVE, "vault must be untouched");
         assert_eq!(token_balance(&e.svm, &taker_ata_b), AMOUNT_TO_RECEIVE, "taker must not have paid");
+    }
+
+    /// The real maker is passed, but never signs. Only `is_signer` stands
+    /// between a bystander and pushing someone's deposit back at them.
+    ///
+    /// The stranger test above cannot cover this: there the caller *does* sign,
+    /// so the stored-maker check is what fires.
+    #[test]
+    pub fn test_cancel_without_maker_signature_fails() {
+        let mut e = make_escrow();
+        let maker_pk = e.maker.pubkey();
+        let maker_ata_a = e.maker_ata_a;
+
+        let bystander = Keypair::new();
+        e.svm.airdrop(&bystander.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+
+        let accounts = vec![
+            AccountMeta::new(maker_pk, false), // present, but not a signer
+            AccountMeta::new_readonly(e.mint_a, false),
+            AccountMeta::new(e.escrow, false),
+            AccountMeta::new(e.vault, false),
+            AccountMeta::new(maker_ata_a, false),
+            AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
+        ];
+        let ix = Instruction { program_id: program_id(), accounts, data: vec![2u8] };
+        let message = Message::new(&[ix], Some(&bystander.pubkey()));
+        let blockhash = e.svm.latest_blockhash();
+        let result = e.svm.send_transaction(Transaction::new(&[&bystander], message, blockhash));
+
+        let reason = failure_reason(&result);
+        assert!(
+            reason.contains("MissingRequiredSignature"),
+            "expected the signer check to reject an unsigned cancel, got: {reason}"
+        );
+        assert_eq!(token_balance(&e.svm, &e.vault), AMOUNT_TO_GIVE, "vault must be untouched");
     }
 }
