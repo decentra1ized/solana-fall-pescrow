@@ -29,7 +29,7 @@ pub fn process_instruction(
         EscrowInstructions::Take => instructions::process_take_instruction(accounts)?, // added for challenge 1
         EscrowInstructions::Cancel => instructions::process_cancel_instruction(accounts)?, //added for challenge 2
         // TODO (challenge): EscrowInstructions::Take and EscrowInstructions::Cancel
-        _ => return Err(ProgramError::InvalidInstructionData),
+        EscrowInstructions::MakeV2 => return Err(ProgramError::InvalidInstructionData), //added MakeV2 
     }
     Ok(())
 }
