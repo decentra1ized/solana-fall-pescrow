@@ -57,7 +57,7 @@ pub fn process_make_instruction(
     // This costs a few thousand CU once, at init. Take and Cancel will use the stored bump
     // with derive_address (a single hash) instead.
     let (escrow_account_pda, bump) =
-        Address::find_program_address(&[b"escrow", maker.address().as_ref()], &crate::ID);
+        Address::derive_program_address(&[b"escrow", maker.address().as_ref()], &crate::ID).unwrap();
     if escrow_account_pda != *escrow_account.address() {
         return Err(ProgramError::InvalidSeeds);
     }
