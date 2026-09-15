@@ -14,7 +14,7 @@ pub fn process_cancel_instruction(
         escrow_account,  // 2  PDA, will be closed
         vault,           // 3  will be closed
         maker_ata_a,     // 4  destination for the returned A
-        token_program,   // 5
+        _token_program,   // 5
     ] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
@@ -23,7 +23,7 @@ pub fn process_cancel_instruction(
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    let (bump) = {
+    let bump = {
     if !escrow_account.owned_by(&crate::ID) {
         return Err(ProgramError::InvalidAccountData);
     }
@@ -84,4 +84,6 @@ escrow_account.set_lamports(0);
 escrow_account.close()?;
 
     Ok(())
+
+    
 }
