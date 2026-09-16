@@ -75,13 +75,14 @@ pub fn process_take_instruction(
         vault_state.amount()
     };
 
-    let taker_ata_b_state = pinocchio_token::state::Account::from_account_view(taker_ata_b)?;
+    {let taker_ata_b_state = pinocchio_token::state::Account::from_account_view(taker_ata_b)?;
         if taker_ata_b_state.owner() != taker.address() {
             return Err(ProgramError::IllegalOwner);
         }
         if taker_ata_b_state.mint() != mint_b.address() {
             return Err(ProgramError::InvalidAccountData);
         }
+    }
 
     pinocchio_associated_token_account::instructions::CreateIdempotent {
         funding_account: taker,

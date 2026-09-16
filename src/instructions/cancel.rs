@@ -81,14 +81,16 @@ pub fn process_cancel_instruction(
         authority: escrow_account,
         multisig_signers: &[] as &[&AccountView],
         amount: vault_amount,
-    }.invoke_signed(&[signer.clone()])?;
+    }
+    .invoke_signed(&[signer.clone()])?;
 
     pinocchio_token::instructions::CloseAccount {
         account: vault,
         destination: maker,
         authority: escrow_account,
         multisig_signers: &[] as &[&AccountView],
-    }.invoke_signed(&[signer])?;
+    }
+    .invoke_signed(&[signer])?;
 
 
     maker.set_lamports(maker.lamports() + escrow_account.lamports());
