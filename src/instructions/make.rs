@@ -1,5 +1,5 @@
 use pinocchio::{
-    AccountView, Address, ProgramResult, cpi::{Seed, Signer}, error::ProgramError, sysvars::{Sysvar, rent::Rent}
+    AccountView, Address, ProgramResult, cpi::{Seed, Signer}, error::ProgramError, sysvars::{Sysvar, rent::Rent,}
 };
 use pinocchio_system::instructions::CreateAccount;
 
@@ -71,6 +71,7 @@ pub fn process_make_instruction(
         return Err(ProgramError::AccountAlreadyInitialized);
     }
 
+    
     CreateAccount {
         from: maker,
         to: escrow_account,
