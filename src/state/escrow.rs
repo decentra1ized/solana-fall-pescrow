@@ -1,4 +1,4 @@
-use pinocchio::{AccountView, account::RefMut, error::ProgramError};
+use pinocchio::{account::RefMut, error::ProgramError, AccountView};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -28,12 +28,14 @@ impl Escrow {
         if data.len() != Escrow::LEN {
             return Err(ProgramError::InvalidAccountData);
         }
-        if (data.as_ptr() as usize) % core::mem::align_of::<Self>() != 0 {
+        if !(data.as_ptr() as usize).is_multiple_of(core::mem::align_of::<Self>()) {
             return Err(ProgramError::InvalidAccountData);
         }
         // SAFETY: `#[repr(C)]`, alignment 1, and the length check above make the cast sound.
         // `RefMut::map` keeps the borrow guard alive, so this is the only borrow of the data.
-        Ok(RefMut::map(data, |bytes| unsafe { &mut *(bytes.as_mut_ptr() as *mut Self) }))
+        Ok(RefMut::map(data, |bytes| unsafe {
+            &mut *(bytes.as_mut_ptr() as *mut Self)
+        }))
     }
 
     pub fn maker(&self) -> pinocchio::Address {
