@@ -28,7 +28,7 @@ impl Escrow {
         if data.len() != Escrow::LEN {
             return Err(ProgramError::InvalidAccountData);
         }
-        if (data.as_ptr() as usize) % core::mem::align_of::<Self>() != 0 {
+        if !(data.as_ptr() as usize).is_multiple_of(core::mem::align_of::<Self>()) {
             return Err(ProgramError::InvalidAccountData);
         }
         // SAFETY: `#[repr(C)]`, alignment 1, and the length check above make the cast sound.

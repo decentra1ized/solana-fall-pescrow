@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use std::path::PathBuf;
 
@@ -35,7 +36,7 @@ mod tests {
     }
 
     fn program_id() -> Pubkey {
-        Pubkey::from(crate::ID)
+        crate::ID
     }
 
     fn setup() -> (LiteSVM, Keypair) {

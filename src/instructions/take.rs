@@ -159,7 +159,7 @@ pub fn process_take_instruction(accounts: &mut [AccountView], data: &[u8]) -> Pr
         multisig_signers: &[] as &[&AccountView],
         amount: vault_amount,
     }
-    .invoke_signed(&[signer.clone()])?;
+    .invoke_signed(core::slice::from_ref(&signer))?;
 
     pinocchio_token::instructions::CloseAccount {
         account: vault,

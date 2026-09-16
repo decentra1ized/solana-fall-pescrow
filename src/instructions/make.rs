@@ -73,7 +73,7 @@ pub fn process_make_instruction(accounts: &mut [AccountView], data: &[u8]) -> Pr
         space: Escrow::LEN as u64,
         owner: &crate::ID,
     }
-    .invoke_signed(&[seeds.clone()])?;
+    .invoke_signed(core::slice::from_ref(&seeds))?;
 
     // Scoped so the mutable borrow on the escrow data is released before the CPIs below.
     {
@@ -91,8 +91,8 @@ pub fn process_make_instruction(accounts: &mut [AccountView], data: &[u8]) -> Pr
         account: escrow_ata,
         wallet: escrow_account,
         mint: mint_a,
-        token_program: token_program,
-        system_program: system_program,
+        token_program,
+        system_program,
     }
     .invoke()?;
 
