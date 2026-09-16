@@ -3,6 +3,9 @@ name = "escrow"
 version = "0.1.0"
 edition = "2021"
 
+[package.metadata.solana]
+tools-version = "v1.52"
+
 [lib]
 crate-type = ["cdylib", "lib"]
 
