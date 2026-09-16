@@ -1,4 +1,4 @@
-use pinocchio::{AccountView, account::RefMut, error::ProgramError};
+use pinocchio::{account::RefMut, error::ProgramError, AccountView};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -12,7 +12,6 @@ pub struct Escrow {
 }
 
 // The getters are not used by `Make` yet; `Take` and `Cancel` will need them.
-#[allow(dead_code)]
 impl Escrow {
     /// Total size of the account data: maker + mint_a + mint_b + amount_to_receive + amount_to_give + bump.
     /// Derived from the struct itself so it can never drift out of sync with the fields (113 bytes).
@@ -33,7 +32,9 @@ impl Escrow {
         }
         // SAFETY: `#[repr(C)]`, alignment 1, and the length check above make the cast sound.
         // `RefMut::map` keeps the borrow guard alive, so this is the only borrow of the data.
-        Ok(RefMut::map(data, |bytes| unsafe { &mut *(bytes.as_mut_ptr() as *mut Self) }))
+        Ok(RefMut::map(data, |bytes| unsafe {
+            &mut *(bytes.as_mut_ptr() as *mut Self)
+        }))
     }
 
     pub fn maker(&self) -> pinocchio::Address {
