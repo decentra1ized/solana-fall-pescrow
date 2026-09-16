@@ -29,8 +29,11 @@ pub fn process_instruction(
     match EscrowInstructions::try_from(discriminator)? {
         EscrowInstructions::Make => instructions::process_make_instruction(accounts, data)?,
         EscrowInstructions::Take => instructions::process_take_instruction(accounts, data)?,
-        // TODO (challenge): EscrowInstructions::Cancel
-        _ => return Err(ProgramError::InvalidInstructionData),
+        EscrowInstructions::Cancel => instructions::process_cancel_instruction(accounts, data)?,
+        // MakeV2 is reserved but not implemented. Naming it, rather than leaving a `_` arm,
+        // keeps this match exhaustive: a variant added later fails to compile here instead
+        // of being silently rejected as bad instruction data.
+        EscrowInstructions::MakeV2 => return Err(ProgramError::InvalidInstructionData),
     }
     Ok(())
 }
