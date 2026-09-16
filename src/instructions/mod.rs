@@ -1,6 +1,8 @@
+pub mod cancel;
 pub mod make;
 pub mod take;
 
+pub use cancel::*;
 pub use make::*;
 use pinocchio::error::ProgramError;
 pub use take::*;
