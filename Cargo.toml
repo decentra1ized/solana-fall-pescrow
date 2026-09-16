@@ -11,7 +11,6 @@ pinocchio = "0.11.2"
 pinocchio-system = "0.6.1"
 pinocchio-token = "0.6.0"
 pinocchio-pubkey = "0.3.0"
-pinocchio-log = "0.5.1"
 pinocchio-associated-token-account = "0.4.0"
 
 [dev-dependencies]

@@ -4,7 +4,6 @@ use pinocchio::{
     error::ProgramError, sysvars::{Sysvar, rent::Rent}
 };
 use pinocchio_system::instructions::CreateAccount;
-use pinocchio_log::log;
 
 use crate::state::Escrow;
 

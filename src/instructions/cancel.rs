@@ -4,7 +4,6 @@ use pinocchio::{
     error::ProgramError, sysvars::{Sysvar, rent::Rent}
 };
 use pinocchio_system::instructions::CreateAccount;
-use pinocchio_log::log;
 
 use crate::state::Escrow;
 
@@ -86,7 +85,5 @@ pub fn process_cancel_instruction(
         .ok_or(ProgramError::ArithmeticOverflow)?
     );
     escrow_account.close()?;
-
-    log!("This is the end of Cancel instruction");
     Ok(())
 }
