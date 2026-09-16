@@ -1103,7 +1103,6 @@ dependencies = [
  "litesvm-token",
  "pinocchio 0.11.2",
  "pinocchio-associated-token-account",
- "pinocchio-log",
  "pinocchio-pubkey",
  "pinocchio-system",
  "pinocchio-token",
@@ -2243,26 +2242,6 @@ dependencies = [
  "solana-address 2.6.1",
  "solana-instruction-view",
  "solana-program-error",
-]
-
-[[package]]
-name = "pinocchio-log"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd11022408f312e6179ece321c1f7dc0d1b2aa7765fddd39b2a7378d65a899e8"
-dependencies = [
- "pinocchio-log-macro",
-]
-
-[[package]]
-name = "pinocchio-log-macro"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69fb52edb3c5736b044cc462b0957b9767d0f574d138f4e2761438c498a4b467"
-dependencies = [
- "quote",
- "regex",
- "syn 1.0.109",
 ]
 
 [[package]]
