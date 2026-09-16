@@ -2,6 +2,7 @@
 use pinocchio::{AccountView, entrypoint, Address, ProgramResult, address::declare_id, error::ProgramError};
 
 use crate::instructions::EscrowInstructions;
+use crate::instructions::process_take_instruction;
 
 mod tests;
 mod state;
@@ -26,6 +27,7 @@ pub fn process_instruction(
 
     match EscrowInstructions::try_from(discriminator)? {
         EscrowInstructions::Make => instructions::process_make_instruction(accounts, data)?,
+        EscrowInstructions::Take => process_take_instruction(accounts)?,
         // TODO (challenge): EscrowInstructions::Take and EscrowInstructions::Cancel
         _ => return Err(ProgramError::InvalidInstructionData),
     }
