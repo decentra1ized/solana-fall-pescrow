@@ -27,6 +27,16 @@ pub fn process_make_instruction(
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
+    if !maker.is_signer() {
+        return Err(ProgramError::MissingRequiredSignature);
+    }
+
+    // Refuse to overwrite an escrow that already exists for this maker; checked before the
+    // expensive bump search below so a repeat `Make` fails cheaply.
+    if escrow_account.owned_by(&crate::ID) {
+        return Err(ProgramError::AccountAlreadyInitialized);
+    }
+
     // Scope the borrow so it is released before any CPI below borrows `maker_ata`.
     {
         let maker_ata_state = pinocchio_token::state::Account::from_account_view(maker_ata)?;
@@ -47,10 +57,6 @@ pub fn process_make_instruction(
     let amount_to_receive = u64::from_le_bytes(data[0..8].try_into().unwrap());
     let amount_to_give = u64::from_le_bytes(data[8..16].try_into().unwrap());
 
-    if !maker.is_signer() {
-        return Err(ProgramError::MissingRequiredSignature);
-    }
-
     // Derive the canonical bump on-chain. Never trust a bump supplied by the client:
     // with seeds ["escrow", maker] a non-canonical bump would let one maker open several
     // "the" escrows, and any client using find_program_address would only see one of them.
@@ -64,12 +70,7 @@ pub fn process_make_instruction(
 
     let bump_bytes = [bump];
     let seed = [Seed::from(b"escrow"), Seed::from(maker.address().as_array()), Seed::from(&bump_bytes)];
-    let seeds = Signer::from(&seed);
-
-    // Refuse to overwrite an escrow that already exists for this maker.
-    if escrow_account.owned_by(&crate::ID) {
-        return Err(ProgramError::AccountAlreadyInitialized);
-    }
+    let seeds = [Signer::from(&seed)];
 
     CreateAccount {
         from: maker,
@@ -77,7 +78,7 @@ pub fn process_make_instruction(
         lamports: Rent::get()?.try_minimum_balance(Escrow::LEN)?,
         space: Escrow::LEN as u64,
         owner: &crate::ID,
-    }.invoke_signed(&[seeds.clone()])?;
+    }.invoke_signed(&seeds)?;
 
     // Scoped so the mutable borrow on the escrow data is released before the CPIs below.
     {

@@ -33,3 +33,10 @@ spl-associated-token-account = { version = "8.0.0", features = ["no-entrypoint"]
 solana-rpc-client = "3.1.9"
 solana-address = "2.2.0"
 solana-account = "4.1.0"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
