@@ -50,7 +50,7 @@ pub fn process_take_instruction(
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    if escrow_account.owned_by(&crate::ID) {
+    if !escrow_account.owned_by(&crate::ID) {
         return Err(ProgramError::AccountAlreadyInitialized);
     }
 
