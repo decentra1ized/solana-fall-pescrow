@@ -33,3 +33,6 @@ spl-associated-token-account = { version = "8.0.0", features = ["no-entrypoint"]
 solana-rpc-client = "3.1.9"
 solana-address = "2.2.0"
 solana-account = "4.1.0"
+# Already in the dependency graph; named here so the negative tests can assert on the
+# exact failure (IllegalOwner, InvalidAccountData) rather than merely "it failed".
+solana-transaction-error = "3.0.0"

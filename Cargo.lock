@@ -1120,6 +1120,7 @@ dependencies = [
  "solana-sdk-ids",
  "solana-signer",
  "solana-transaction",
+ "solana-transaction-error",
  "spl-associated-token-account",
  "spl-token-2022",
 ]
