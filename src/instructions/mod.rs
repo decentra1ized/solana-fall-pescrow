@@ -1,6 +1,11 @@
 pub mod make;
+pub mod take;		// added this
+pub mod cancel; 	// added this (checkpoint 5 item)
+	
+pub use make::*;	
+pub use take::*;	// added this too
+pub use cancel::*; 	// added this too (checkpoint 5 item)
 
-pub use make::*;
 use pinocchio::error::ProgramError;
 
 pub enum EscrowInstructions {
