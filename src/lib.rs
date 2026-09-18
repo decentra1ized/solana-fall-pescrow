@@ -3,6 +3,7 @@ use pinocchio::{AccountView, entrypoint, Address, ProgramResult, address::declar
 
 use crate::instructions::EscrowInstructions;
 use crate::instructions::process_take_instruction;
+use crate::instructions::process_cancel_instruction;
 
 mod tests;
 mod state;

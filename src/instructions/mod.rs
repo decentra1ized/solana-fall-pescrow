@@ -4,6 +4,7 @@ pub mod cancel;
 
 pub use make::*;
 pub use take::*;
+pub use cancel::*;
 use pinocchio::error::ProgramError;
 
 pub enum EscrowInstructions {
