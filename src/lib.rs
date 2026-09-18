@@ -21,13 +21,19 @@ pub fn process_instruction(
         return Err(ProgramError::IncorrectProgramId);
     }
 
+    // First byte of instruction data is the discriminator, which tells us which instruction to execute
+    // The rest of the instruction data is the instruction's payload, which is passed to the instruction's processor function
     let (discriminator, data) = instruction_data.split_first()
         .ok_or(ProgramError::InvalidInstructionData)?;
 
     match EscrowInstructions::try_from(discriminator)? {
         EscrowInstructions::Make => instructions::process_make_instruction(accounts, data)?,
         // TODO (challenge): EscrowInstructions::Take and EscrowInstructions::Cancel
-        _ => return Err(ProgramError::InvalidInstructionData),
+         => return Err(ProgramError::InvalidInstructionData),
+        EscrowInstructions::Take => instructions::process_take_instruction(accounts, data)?,
+         => return Err(ProgramError::InvalidInstructionData),
+         EscrowInstructions::Cancel => instructions::process_cancel_instruction(accounts, data)?,
+         _ => return Err(ProgramError::InvalidInstructionData),
     }
     Ok(())
 }

@@ -11,6 +11,7 @@ pub enum EscrowInstructions {
 }
 
 impl TryFrom<&u8> for EscrowInstructions {
+    /* 0 → Make, 1 → Take, 2 → Cancel, 3 → MakeV2, _ → error */
     type Error = ProgramError;
 
     fn try_from(value: &u8) -> Result<Self, Self::Error> {
