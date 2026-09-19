@@ -5,8 +5,7 @@
 // 2  escrow_account   (writable)         - the deal record, will be closed
 // 3  vault            (writable)         - the "safe" holding token A
 // 4  maker_ata_a      (writable)         - where maker gets token A back
-// 5  system_program
-// 6  token_program
+// 5  token_program
 // ============================================================
 
 use pinocchio::{
@@ -33,7 +32,6 @@ pub fn process_cancel_instruction(
         escrow_account,
         vault,
         maker_ata_a,
-        _system_program,
         _token_program,
     ] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
