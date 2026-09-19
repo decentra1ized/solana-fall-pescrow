@@ -33,6 +33,10 @@ pub fn process_instruction(
             instructions::process_take_instruction(accounts, data)?;
             Ok(())
         }
+        EscrowInstructions::Cancel => {
+            instructions::process_cancel_instruction(accounts, data)?;
+            Ok(())
+        }
         _ => Err(ProgramError::InvalidInstructionData),
     }
     
