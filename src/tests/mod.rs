@@ -175,4 +175,351 @@ mod tests {
         assert_eq!(u64::from_le_bytes(d[104..112].try_into().unwrap()), amount_to_give);
         assert_eq!(d[112], bump);
     }
+
+    struct EscrowTestContext {
+        pub svm: LiteSVM,
+        pub maker: Keypair,
+        pub mint_a: Pubkey,
+        pub mint_b: Pubkey,
+        pub escrow_pda: Pubkey,
+        #[allow(dead_code)]
+        pub bump: u8,
+        pub vault: Pubkey,
+        pub maker_ata_a: Pubkey,
+        pub amount_to_receive: u64,
+        pub amount_to_give: u64,
+        pub initial_maker_balance: u64,
+    }
+
+    fn setup_make() -> EscrowTestContext {
+        let (mut svm, maker) = setup();
+        let program_id = program_id();
+
+        let mint_a = CreateMint::new(&mut svm, &maker)
+            .decimals(6)
+            .authority(&maker.pubkey())
+            .send()
+            .unwrap();
+
+        let mint_b = CreateMint::new(&mut svm, &maker)
+            .decimals(6)
+            .authority(&maker.pubkey())
+            .send()
+            .unwrap();
+
+        let maker_ata_a = CreateAssociatedTokenAccount::new(&mut svm, &maker, &mint_a)
+            .owner(&maker.pubkey())
+            .send()
+            .unwrap();
+
+        let initial_maker_balance: u64 = 1_000_000_000;
+        MintTo::new(&mut svm, &maker, &mint_a, &maker_ata_a, initial_maker_balance)
+            .send()
+            .unwrap();
+
+        let escrow = Pubkey::find_program_address(
+            &[b"escrow".as_ref(), maker.pubkey().as_ref()],
+            &PROGRAM_ID.parse().unwrap(),
+        );
+
+        let vault = spl_associated_token_account::get_associated_token_address(
+            &escrow.0,
+            &mint_a,
+        );
+
+        let associated_token_program = ASSOCIATED_TOKEN_PROGRAM_ID.parse::<Pubkey>().unwrap();
+        let token_program = TOKEN_PROGRAM_ID;
+        let system_program = solana_sdk_ids::system_program::ID;
+
+        let amount_to_receive: u64 = 100_000_000;
+        let amount_to_give: u64 = 500_000_000;
+
+        let make_data = [
+            vec![0u8],
+            amount_to_receive.to_le_bytes().to_vec(),
+            amount_to_give.to_le_bytes().to_vec(),
+        ]
+        .concat();
+
+        let make_ix = Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(maker.pubkey(), true),
+                AccountMeta::new(mint_a, false),
+                AccountMeta::new(mint_b, false),
+                AccountMeta::new(escrow.0, false),
+                AccountMeta::new(maker_ata_a, false),
+                AccountMeta::new(vault, false),
+                AccountMeta::new(system_program, false),
+                AccountMeta::new(token_program, false),
+                AccountMeta::new(associated_token_program, false),
+            ],
+            data: make_data,
+        };
+
+        let message = Message::new(&[make_ix], Some(&maker.pubkey()));
+        let recent_blockhash = svm.latest_blockhash();
+        let transaction = Transaction::new(&[&maker], message, recent_blockhash);
+        svm.send_transaction(transaction).unwrap();
+
+        EscrowTestContext {
+            svm,
+            maker,
+            mint_a,
+            mint_b,
+            escrow_pda: escrow.0,
+            bump: escrow.1,
+            vault,
+            maker_ata_a,
+            amount_to_receive,
+            amount_to_give,
+            initial_maker_balance,
+        }
+    }
+
+    #[test]
+    pub fn test_take_instruction() {
+        let mut ctx = setup_make();
+        let program_id = program_id();
+
+        // Setup taker keypair and fund with SOL
+        let taker = Keypair::new();
+        ctx.svm
+            .airdrop(&taker.pubkey(), 10 * LAMPORTS_PER_SOL)
+            .expect("Taker airdrop failed");
+
+        // Fund taker with Mint B
+        let taker_ata_b = CreateAssociatedTokenAccount::new(&mut ctx.svm, &taker, &ctx.mint_b)
+            .owner(&taker.pubkey())
+            .send()
+            .unwrap();
+
+        MintTo::new(
+            &mut ctx.svm,
+            &ctx.maker,
+            &ctx.mint_b,
+            &taker_ata_b,
+            ctx.amount_to_receive,
+        )
+        .send()
+        .unwrap();
+
+        // Derive ATAs (to be created idempotently by the program)
+        let taker_ata_a = spl_associated_token_account::get_associated_token_address(
+            &taker.pubkey(),
+            &ctx.mint_a,
+        );
+        let maker_ata_b = spl_associated_token_account::get_associated_token_address(
+            &ctx.maker.pubkey(),
+            &ctx.mint_b,
+        );
+
+        let maker_sol_before = ctx.svm.get_account(&ctx.maker.pubkey()).unwrap().lamports;
+
+        // Build Take instruction
+        let take_data = vec![1u8];
+        let take_ix = Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(taker.pubkey(), true),
+                AccountMeta::new(ctx.maker.pubkey(), false),
+                AccountMeta::new(ctx.mint_a, false),
+                AccountMeta::new(ctx.mint_b, false),
+                AccountMeta::new(ctx.escrow_pda, false),
+                AccountMeta::new(ctx.vault, false),
+                AccountMeta::new(taker_ata_a, false),
+                AccountMeta::new(taker_ata_b, false),
+                AccountMeta::new(maker_ata_b, false),
+                AccountMeta::new(solana_sdk_ids::system_program::ID, false),
+                AccountMeta::new(TOKEN_PROGRAM_ID, false),
+                AccountMeta::new(ASSOCIATED_TOKEN_PROGRAM_ID.parse().unwrap(), false),
+            ],
+            data: take_data,
+        };
+
+        let message = Message::new(&[take_ix], Some(&taker.pubkey()));
+        let recent_blockhash = ctx.svm.latest_blockhash();
+        let transaction = Transaction::new(&[&taker], message, recent_blockhash);
+        let tx = ctx.svm.send_transaction(transaction).unwrap();
+
+        println!("\nTake transaction successful");
+        println!("CUs Consumed: {}", tx.compute_units_consumed);
+
+        // Assert post-conditions
+        let taker_a_acc = ctx.svm.get_account(&taker_ata_a).unwrap();
+        let taker_a_state = spl_token_2022::state::Account::unpack(&taker_a_acc.data).unwrap();
+        assert_eq!(taker_a_state.amount, ctx.amount_to_give);
+
+        let maker_b_acc = ctx.svm.get_account(&maker_ata_b).unwrap();
+        let maker_b_state = spl_token_2022::state::Account::unpack(&maker_b_acc.data).unwrap();
+        assert_eq!(maker_b_state.amount, ctx.amount_to_receive);
+
+        let taker_b_acc = ctx.svm.get_account(&taker_ata_b).unwrap();
+        let taker_b_state = spl_token_2022::state::Account::unpack(&taker_b_acc.data).unwrap();
+        assert_eq!(taker_b_state.amount, 0);
+
+        let vault_acc = ctx.svm.get_account(&ctx.vault);
+        assert!(vault_acc.is_none() || vault_acc.unwrap().lamports == 0);
+
+        let escrow_acc = ctx.svm.get_account(&ctx.escrow_pda);
+        assert!(escrow_acc.is_none() || escrow_acc.unwrap().lamports == 0);
+
+        let maker_sol_after = ctx.svm.get_account(&ctx.maker.pubkey()).unwrap().lamports;
+        assert!(
+            maker_sol_after > maker_sol_before,
+            "Maker should receive rent refund from closed accounts"
+        );
+    }
+
+    #[test]
+    pub fn test_cancel_instruction() {
+        let mut ctx = setup_make();
+        let program_id = program_id();
+
+        // Build Cancel instruction
+        let cancel_data = vec![2u8];
+        let cancel_ix = Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(ctx.maker.pubkey(), true),
+                AccountMeta::new(ctx.mint_a, false),
+                AccountMeta::new(ctx.escrow_pda, false),
+                AccountMeta::new(ctx.vault, false),
+                AccountMeta::new(ctx.maker_ata_a, false),
+                AccountMeta::new(TOKEN_PROGRAM_ID, false),
+            ],
+            data: cancel_data,
+        };
+
+        let message = Message::new(&[cancel_ix], Some(&ctx.maker.pubkey()));
+        let recent_blockhash = ctx.svm.latest_blockhash();
+        let transaction = Transaction::new(&[&ctx.maker], message, recent_blockhash);
+        let tx = ctx.svm.send_transaction(transaction).unwrap();
+
+        println!("\nCancel transaction successful");
+        println!("CUs Consumed: {}", tx.compute_units_consumed);
+
+        // Assert post-conditions
+        let maker_acc = ctx.svm.get_account(&ctx.maker_ata_a).unwrap();
+        let maker_state = spl_token_2022::state::Account::unpack(&maker_acc.data).unwrap();
+        assert_eq!(maker_state.amount, ctx.initial_maker_balance);
+
+        let vault_acc = ctx.svm.get_account(&ctx.vault);
+        assert!(vault_acc.is_none() || vault_acc.unwrap().lamports == 0);
+
+        let escrow_acc = ctx.svm.get_account(&ctx.escrow_pda);
+        assert!(escrow_acc.is_none() || escrow_acc.unwrap().lamports == 0);
+    }
+
+    #[test]
+    pub fn test_take_insufficient_balance() {
+        let mut ctx = setup_make();
+        let program_id = program_id();
+
+        let taker = Keypair::new();
+        ctx.svm
+            .airdrop(&taker.pubkey(), 10 * LAMPORTS_PER_SOL)
+            .expect("Taker airdrop failed");
+
+        let taker_ata_b = CreateAssociatedTokenAccount::new(&mut ctx.svm, &taker, &ctx.mint_b)
+            .owner(&taker.pubkey())
+            .send()
+            .unwrap();
+
+        // Mint only 50 B (needs 100 B)
+        MintTo::new(
+            &mut ctx.svm,
+            &ctx.maker,
+            &ctx.mint_b,
+            &taker_ata_b,
+            ctx.amount_to_receive / 2,
+        )
+        .send()
+        .unwrap();
+
+        let taker_ata_a = spl_associated_token_account::get_associated_token_address(
+            &taker.pubkey(),
+            &ctx.mint_a,
+        );
+        let maker_ata_b = spl_associated_token_account::get_associated_token_address(
+            &ctx.maker.pubkey(),
+            &ctx.mint_b,
+        );
+
+        let take_data = vec![1u8];
+        let take_ix = Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(taker.pubkey(), true),
+                AccountMeta::new(ctx.maker.pubkey(), false),
+                AccountMeta::new(ctx.mint_a, false),
+                AccountMeta::new(ctx.mint_b, false),
+                AccountMeta::new(ctx.escrow_pda, false),
+                AccountMeta::new(ctx.vault, false),
+                AccountMeta::new(taker_ata_a, false),
+                AccountMeta::new(taker_ata_b, false),
+                AccountMeta::new(maker_ata_b, false),
+                AccountMeta::new(solana_sdk_ids::system_program::ID, false),
+                AccountMeta::new(TOKEN_PROGRAM_ID, false),
+                AccountMeta::new(ASSOCIATED_TOKEN_PROGRAM_ID.parse().unwrap(), false),
+            ],
+            data: take_data,
+        };
+
+        let message = Message::new(&[take_ix], Some(&taker.pubkey()));
+        let recent_blockhash = ctx.svm.latest_blockhash();
+        let transaction = Transaction::new(&[&taker], message, recent_blockhash);
+        let result = ctx.svm.send_transaction(transaction);
+
+        assert!(
+            result.is_err(),
+            "Take with insufficient balance must fail"
+        );
+
+        // Confirm 500 A never left the vault
+        let vault_acc = ctx.svm.get_account(&ctx.vault).unwrap();
+        let vault_state = spl_token_2022::state::Account::unpack(&vault_acc.data).unwrap();
+        assert_eq!(vault_state.amount, ctx.amount_to_give);
+    }
+
+    #[test]
+    pub fn test_cancel_by_stranger() {
+        let mut ctx = setup_make();
+        let program_id = program_id();
+
+        let stranger = Keypair::new();
+        ctx.svm
+            .airdrop(&stranger.pubkey(), 10 * LAMPORTS_PER_SOL)
+            .expect("Stranger airdrop failed");
+
+        // Stranger attempts to cancel the escrow
+        let cancel_data = vec![2u8];
+        let cancel_ix = Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(stranger.pubkey(), true),
+                AccountMeta::new(ctx.mint_a, false),
+                AccountMeta::new(ctx.escrow_pda, false),
+                AccountMeta::new(ctx.vault, false),
+                AccountMeta::new(ctx.maker_ata_a, false),
+                AccountMeta::new(TOKEN_PROGRAM_ID, false),
+            ],
+            data: cancel_data,
+        };
+
+        let message = Message::new(&[cancel_ix], Some(&stranger.pubkey()));
+        let recent_blockhash = ctx.svm.latest_blockhash();
+        let transaction = Transaction::new(&[&stranger], message, recent_blockhash);
+        let result = ctx.svm.send_transaction(transaction);
+
+        assert!(
+            result.is_err(),
+            "A stranger must not be able to cancel someone else's escrow"
+        );
+
+        // Confirm 500 A still in vault
+        let vault_acc = ctx.svm.get_account(&ctx.vault).unwrap();
+        let vault_state = spl_token_2022::state::Account::unpack(&vault_acc.data).unwrap();
+        assert_eq!(vault_state.amount, ctx.amount_to_give);
+    }
 }
