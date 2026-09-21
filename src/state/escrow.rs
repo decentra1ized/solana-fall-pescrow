@@ -6,8 +6,8 @@ pub struct Escrow {
     maker: [u8; 32],
     mint_a: [u8; 32],
     mint_b: [u8; 32],
-    amount_to_receive: [u8; 8],
-    amount_to_give: [u8; 8],
+    amount_to_receive: [u8; 8], //stored as raw LE bytes, not u64, to avoid alignment issues
+    amount_to_give: [u8; 8], // ↑ keeps align_of::<Escrow>() == 1 
     pub bump: u8,
 }
 
@@ -16,7 +16,7 @@ pub struct Escrow {
 impl Escrow {
     /// Total size of the account data: maker + mint_a + mint_b + amount_to_receive + amount_to_give + bump.
     /// Derived from the struct itself so it can never drift out of sync with the fields (113 bytes).
-    pub const LEN: usize = core::mem::size_of::<Self>();
+    pub const LEN: usize = core::mem::size_of::<Self>(); // 113. Let the compiler calculate it so it can never drift out of sync with the fields.
 
     /// Borrow the account data as a typed, mutable `Escrow` view.
     ///

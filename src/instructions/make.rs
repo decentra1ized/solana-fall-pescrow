@@ -37,7 +37,7 @@ pub fn process_make_instruction(
             return Err(ProgramError::InvalidAccountData);
         }
     }
-
+    const MAKE_DATA_LEN: usize = 16; // 8 + 8
     // Instruction data layout (after the discriminator byte):
     //   [0..8]   amount_to_receive: u64 (little-endian)
     //   [8..16]  amount_to_give: u64 (little-endian)
@@ -57,10 +57,13 @@ pub fn process_make_instruction(
     // This costs a few thousand CU once, at init. Take and Cancel will use the stored bump
     // with derive_address (a single hash) instead.
     let (escrow_account_pda, bump) =
-        Address::find_program_address(&[b"escrow", maker.address().as_ref()], &crate::ID);
-    if escrow_account_pda != *escrow_account.address() {
-        return Err(ProgramError::InvalidSeeds);
-    }
+    match Address::derive_program_address(
+        &[b"escrow", maker.address().as_ref()],
+        &crate::ID,
+    ) {
+        Some(value) => value,
+        None => return Err(ProgramError::InvalidSeeds),
+    };
 
     let bump_bytes = [bump];
     let seed = [Seed::from(b"escrow"), Seed::from(maker.address().as_array()), Seed::from(&bump_bytes)];
@@ -107,5 +110,7 @@ pub fn process_make_instruction(
         amount: amount_to_give,
     }.invoke()?;
 
+
     Ok(())
 }
+
