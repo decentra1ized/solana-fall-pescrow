@@ -1,8 +1,10 @@
-pub mod make;
+mod make;
 mod take;
+mod cancel;
 
 pub use make::*;
 pub use take::*;
+pub use cancel::*;
 use pinocchio::error::ProgramError;
 
 pub enum EscrowInstructions {

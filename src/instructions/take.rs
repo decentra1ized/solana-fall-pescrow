@@ -28,7 +28,7 @@ pub fn process_take_instruction(
         maker_ata_b,
         system_program,
         token_program,
-        associated_token_program,
+        _associated_token_program,
     ] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
@@ -74,7 +74,7 @@ pub fn process_take_instruction(
     // 3. Re-derive the escrow PDA
     // --------------------------------------------------
 
-    let escrow_pda = derive_address(
+    let _escrow_pda = derive_address(
         &[
             b"escrow",
             maker.address().as_ref(),
