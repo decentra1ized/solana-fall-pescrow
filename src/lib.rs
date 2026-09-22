@@ -25,8 +25,10 @@ pub fn process_instruction(
         .ok_or(ProgramError::InvalidInstructionData)?;
 
     match EscrowInstructions::try_from(discriminator)? {
-        EscrowInstructions::Make => instructions::process_make_instruction(accounts, data)?,
-        // TODO (challenge): EscrowInstructions::Take and EscrowInstructions::Cancel
+        EscrowInstructions::Make => {
+            instructions::process_make_instruction(accounts, data)?
+        }
+    
         _ => return Err(ProgramError::InvalidInstructionData),
     }
     Ok(())
