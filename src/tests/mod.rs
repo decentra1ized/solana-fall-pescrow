@@ -56,6 +56,153 @@ mod tests {
         
     }
 
+    const AMOUNT_TO_RECEIVE: u64 = 100000000;
+    const AMOUNT_TO_GIVE: u64 = 500000000;
+    const MAKER_START_A: u64 = 1000000000;
+
+    struct Escrow {
+        svm: LiteSVM,
+        maker: Keypair,
+        mint_a: Pubkey,
+        mint_b: Pubkey,
+        escrow: Pubkey,
+        vault: Pubkey,
+        maker_ata_a: Pubkey,
+    }
+
+    /// Two mints, a funded maker, and a Make already sent. Everything Take and Cancel need.
+    fn setup_escrow() -> Escrow {
+        let (mut svm, payer) = setup();
+
+        let mint_a = CreateMint::new(&mut svm, &payer)
+            .decimals(6).authority(&payer.pubkey()).send().unwrap();
+        let mint_b = CreateMint::new(&mut svm, &payer)
+            .decimals(6).authority(&payer.pubkey()).send().unwrap();
+
+        let maker_ata_a = CreateAssociatedTokenAccount::new(&mut svm, &payer, &mint_a)
+            .owner(&payer.pubkey()).send().unwrap();
+        MintTo::new(&mut svm, &payer, &mint_a, &maker_ata_a, MAKER_START_A).send().unwrap();
+
+        let (escrow, _bump) = Pubkey::find_program_address(
+            &[b"escrow".as_ref(), payer.pubkey().as_ref()],
+            &program_id(),
+        );
+        let vault = spl_associated_token_account::get_associated_token_address(&escrow, &mint_a);
+
+        let make_data = [
+            vec![0u8],
+            AMOUNT_TO_RECEIVE.to_le_bytes().to_vec(),
+            AMOUNT_TO_GIVE.to_le_bytes().to_vec(),
+        ].concat();
+
+        let make_ix = Instruction {
+            program_id: program_id(),
+            accounts: vec![
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new(mint_a, false),
+                AccountMeta::new(mint_b, false),
+                AccountMeta::new(escrow, false),
+                AccountMeta::new(maker_ata_a, false),
+                AccountMeta::new(vault, false),
+                AccountMeta::new(solana_sdk_ids::system_program::ID, false),
+                AccountMeta::new(TOKEN_PROGRAM_ID, false),
+                AccountMeta::new(ASSOCIATED_TOKEN_PROGRAM_ID.parse::<Pubkey>().unwrap(), false),
+            ],
+            data: make_data,
+        };
+
+        let message = Message::new(&[make_ix], Some(&payer.pubkey()));
+        let blockhash = svm.latest_blockhash();
+        svm.send_transaction(Transaction::new(&[&payer], message, blockhash))
+            .expect("Make failed in setup");
+
+        Escrow { svm, maker: payer, mint_a, mint_b, escrow, vault, maker_ata_a }
+    }
+
+    fn token_balance(svm: &LiteSVM, ata: &Pubkey) -> u64 {
+        let acc = svm.get_account(ata).unwrap();
+        spl_token_2022::state::Account::unpack(&acc.data).unwrap().amount
+    }
+
+    /// Closed accounts come back as None or as an emptied-out account in LiteSVM.
+    fn is_closed(svm: &LiteSVM, key: &Pubkey) -> bool {
+        match svm.get_account(key) {
+            None => true,
+            Some(acc) => acc.lamports == 0 && acc.data.is_empty(),
+        }
+    }
+
+    // taker, maker, mint_a, mint_b, escrow, vault, taker_ata_a, taker_ata_b,
+    // maker_ata_b, system_program, token_program, associated_token_program
+    fn take_ix(
+        e: &Escrow,
+        taker: &Pubkey,
+        maker: &Pubkey,
+        taker_ata_a: &Pubkey,
+        taker_ata_b: &Pubkey,
+        maker_ata_b: &Pubkey,
+    ) -> Instruction {
+        Instruction {
+            program_id: program_id(),
+            accounts: vec![
+                AccountMeta::new(*taker, true),
+                AccountMeta::new(*maker, false),
+                AccountMeta::new(e.mint_a, false),
+                AccountMeta::new(e.mint_b, false),
+                AccountMeta::new(e.escrow, false),
+                AccountMeta::new(e.vault, false),
+                AccountMeta::new(*taker_ata_a, false),
+                AccountMeta::new(*taker_ata_b, false),
+                AccountMeta::new(*maker_ata_b, false),
+                AccountMeta::new(solana_sdk_ids::system_program::ID, false),
+                AccountMeta::new(TOKEN_PROGRAM_ID, false),
+                AccountMeta::new(ASSOCIATED_TOKEN_PROGRAM_ID.parse::<Pubkey>().unwrap(), false),
+            ],
+            data: vec![1u8],
+        }
+    }
+
+    // maker, mint_a, escrow, vault, maker_ata_a, token_program
+    fn cancel_ix(e: &Escrow, maker: &Pubkey) -> Instruction {
+        Instruction {
+            program_id: program_id(),
+            accounts: vec![
+                AccountMeta::new(*maker, true),
+                AccountMeta::new(e.mint_a, false),
+                AccountMeta::new(e.escrow, false),
+                AccountMeta::new(e.vault, false),
+                AccountMeta::new(e.maker_ata_a, false),
+                AccountMeta::new(TOKEN_PROGRAM_ID, false),
+            ],
+            data: vec![2u8],
+        }
+    }
+
+    /// Funds a taker with `amount_b` of mint B and returns (taker, taker_ata_a, taker_ata_b).
+    fn fund_taker(e: &mut Escrow, amount_b: u64) -> (Keypair, Pubkey, Pubkey) {
+        let taker = Keypair::new();
+        e.svm.airdrop(&taker.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+
+        let taker_ata_b = CreateAssociatedTokenAccount::new(&mut e.svm, &taker, &e.mint_b)
+            .owner(&taker.pubkey()).send().unwrap();
+        MintTo::new(&mut e.svm, &e.maker, &e.mint_b, &taker_ata_b, amount_b).send().unwrap();
+
+        // Not created here on purpose: the program creates it with CreateIdempotent.
+        let taker_ata_a = spl_associated_token_account::get_associated_token_address(
+            &taker.pubkey(), &e.mint_a);
+
+        (taker, taker_ata_a, taker_ata_b)
+    }
+
+    fn send(e: &mut Escrow, ix: Instruction, signer: &Keypair) -> Result<u64, String> {
+        let message = Message::new(&[ix], Some(&signer.pubkey()));
+        let blockhash = e.svm.latest_blockhash();
+        let tx = Transaction::new(&[signer], message, blockhash);
+        e.svm.send_transaction(tx)
+            .map(|meta| meta.compute_units_consumed)
+            .map_err(|err| format!("{:?}", err.err))
+    }
+
     #[test]
     pub fn test_make_instruction() {
         let (mut svm, payer) = setup();
@@ -174,5 +321,98 @@ mod tests {
         assert_eq!(u64::from_le_bytes(d[96..104].try_into().unwrap()), amount_to_receive);
         assert_eq!(u64::from_le_bytes(d[104..112].try_into().unwrap()), amount_to_give);
         assert_eq!(d[112], bump);
+    }
+
+    #[test]
+    pub fn test_take_instruction() {
+        let mut e = setup_escrow();
+        let (taker, taker_ata_a, taker_ata_b) = fund_taker(&mut e, AMOUNT_TO_RECEIVE);
+
+        let maker_ata_b = spl_associated_token_account::get_associated_token_address(
+            &e.maker.pubkey(), &e.mint_b);
+        let maker_sol_before = e.svm.get_account(&e.maker.pubkey()).unwrap().lamports;
+
+        let ix = take_ix(&e, &taker.pubkey(), &e.maker.pubkey(), &taker_ata_a, &taker_ata_b, &maker_ata_b);
+        let cus = send(&mut e, ix, &taker).expect("take should succeed");
+        println!("\n\nTake transaction successful");
+        println!("CUs Consumed: {}", cus);
+
+        assert_eq!(token_balance(&e.svm, &taker_ata_a), AMOUNT_TO_GIVE);
+        assert_eq!(token_balance(&e.svm, &maker_ata_b), AMOUNT_TO_RECEIVE);
+        assert_eq!(token_balance(&e.svm, &taker_ata_b), 0);
+        assert!(is_closed(&e.svm, &e.vault), "vault should be closed");
+        assert!(is_closed(&e.svm, &e.escrow), "escrow should be closed");
+
+        // The maker funded both accounts, so both rents come back to them.
+        let maker_sol_after = e.svm.get_account(&e.maker.pubkey()).unwrap().lamports;
+        assert!(maker_sol_after > maker_sol_before, "maker should get the rent back");
+    }
+
+    #[test]
+    pub fn test_cancel_instruction() {
+        let mut e = setup_escrow();
+        assert_eq!(token_balance(&e.svm, &e.maker_ata_a), MAKER_START_A - AMOUNT_TO_GIVE);
+
+        let maker = e.maker.insecure_clone();
+        let ix = cancel_ix(&e, &maker.pubkey());
+        let cus = send(&mut e, ix, &maker).expect("cancel should succeed");
+        println!("\n\nCancel transaction successful");
+        println!("CUs Consumed: {}", cus);
+
+        assert_eq!(token_balance(&e.svm, &e.maker_ata_a), MAKER_START_A);
+        assert!(is_closed(&e.svm, &e.vault), "vault should be closed");
+        assert!(is_closed(&e.svm, &e.escrow), "escrow should be closed");
+    }
+
+    #[test]
+    pub fn test_take_fails_when_taker_is_underfunded() {
+        let mut e = setup_escrow();
+        let (taker, taker_ata_a, taker_ata_b) = fund_taker(&mut e, AMOUNT_TO_RECEIVE / 2);
+
+        let maker_ata_b = spl_associated_token_account::get_associated_token_address(
+            &e.maker.pubkey(), &e.mint_b);
+
+        let ix = take_ix(&e, &taker.pubkey(), &e.maker.pubkey(), &taker_ata_a, &taker_ata_b, &maker_ata_b);
+        let err = send(&mut e, ix, &taker).unwrap_err();
+        println!("\n\nUnderfunded take rejected: {}", err);
+
+        // Nothing moved: the whole transaction rolled back.
+        assert_eq!(token_balance(&e.svm, &e.vault), AMOUNT_TO_GIVE);
+        assert_eq!(token_balance(&e.svm, &taker_ata_b), AMOUNT_TO_RECEIVE / 2);
+        assert!(!is_closed(&e.svm, &e.escrow), "escrow should still be open");
+    }
+
+    #[test]
+    pub fn test_cancel_by_stranger_fails() {
+        let mut e = setup_escrow();
+
+        let stranger = Keypair::new();
+        e.svm.airdrop(&stranger.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+        // Same accounts as a real cancel, only the signer is swapped.
+        let ix = cancel_ix(&e, &stranger.pubkey());
+        let err = send(&mut e, ix, &stranger).unwrap_err();
+        println!("\n\nStranger cancel rejected: {}", err);
+
+        assert_eq!(token_balance(&e.svm, &e.vault), AMOUNT_TO_GIVE);
+        assert!(!is_closed(&e.svm, &e.escrow), "escrow should still be open");
+    }
+
+    #[test]
+    pub fn test_take_with_wrong_maker_fails() {
+        let mut e = setup_escrow();
+        let (taker, taker_ata_a, taker_ata_b) = fund_taker(&mut e, AMOUNT_TO_RECEIVE);
+
+        let impostor = Keypair::new();
+        e.svm.airdrop(&impostor.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        let impostor_ata_b = spl_associated_token_account::get_associated_token_address(
+            &impostor.pubkey(), &e.mint_b);
+
+        let ix = take_ix(&e, &taker.pubkey(), &impostor.pubkey(), &taker_ata_a, &taker_ata_b, &impostor_ata_b);
+        let err = send(&mut e, ix, &taker).unwrap_err();
+        println!("\n\nTake with the wrong maker rejected: {}", err);
+
+        assert_eq!(token_balance(&e.svm, &e.vault), AMOUNT_TO_GIVE);
+        assert!(!is_closed(&e.svm, &e.escrow), "escrow should still be open");
     }
 }
