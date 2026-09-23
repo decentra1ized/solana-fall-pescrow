@@ -12,12 +12,15 @@ mod tests {
     use solana_native_token::LAMPORTS_PER_SOL;
     use solana_pubkey::Pubkey;
     use solana_signer::Signer;
-    use solana_transaction::Transaction;
+    use solana_transaction::{InstructionError, Transaction, TransactionError};
     use solana_program_pack::Pack;
 
     const PROGRAM_ID: &str = "4ibrEMW5F6hKnkW4jVedswYv6H6VtwPN6ar6dvXDN1nT";
     const TOKEN_PROGRAM_ID: Pubkey = spl_token::ID;
     const ASSOCIATED_TOKEN_PROGRAM_ID: &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+    const INITIAL_A: u64 = 1_000_000_000;
+    const AMOUNT_TO_GIVE: u64 = 500_000_000;
+    const AMOUNT_TO_RECEIVE: u64 = 100_000_000;
     
     fn program_id() -> Pubkey {
         Pubkey::from(crate::ID)
@@ -58,121 +61,296 @@ mod tests {
 
     #[test]
     pub fn test_make_instruction() {
-        let (mut svm, payer) = setup();
-
-        let program_id = program_id();
-
-        assert_eq!(program_id.to_string(), PROGRAM_ID);
-
-        let mint_a = CreateMint::new(&mut svm, &payer)
-            .decimals(6)
-            .authority(&payer.pubkey())
-            .send()
-            .unwrap();
-        println!("Mint A: {}", mint_a);
-
-        let mint_b = CreateMint::new(&mut svm, &payer)
-            .decimals(6)
-            .authority(&payer.pubkey())
-            .send()
-            .unwrap();
-        println!("Mint B: {}", mint_b);
-
-        // Create the maker's associated token account for Mint A
-        let maker_ata_a = CreateAssociatedTokenAccount::new(&mut svm, &payer, &mint_a)
-            .owner(&payer.pubkey()).send().unwrap();
-        println!("Maker ATA A: {}\n", maker_ata_a);
-
-        // Derive the PDA for the escrow account using the maker's public key and a seed value
-        let escrow = Pubkey::find_program_address(
-            &[b"escrow".as_ref(), payer.pubkey().as_ref()],
-            &PROGRAM_ID.parse().unwrap(),
+        let fixture = make_escrow();
+        assert_eq!(program_id().to_string(), PROGRAM_ID);
+        assert_eq!(token_amount(&fixture.svm, &fixture.vault), AMOUNT_TO_GIVE);
+        assert_eq!(
+            token_amount(&fixture.svm, &fixture.maker_ata_a),
+            INITIAL_A - AMOUNT_TO_GIVE
         );
-        println!("Escrow PDA: {}\n", escrow.0);
-
-        // Derive the PDA for the vault associated token account using the escrow PDA and Mint A
-        let vault = spl_associated_token_account::get_associated_token_address(
-            &escrow.0,  // owner will be the escrow PDA
-            &mint_a     // mint
+        let escrow_account = fixture.svm.get_account(&fixture.escrow).unwrap();
+        assert_eq!(escrow_account.owner, program_id());
+        let data = &escrow_account.data;
+        assert_eq!(data.len(), 113);
+        assert_eq!(&data[0..32], fixture.maker.pubkey().as_ref());
+        assert_eq!(&data[32..64], fixture.mint_a.as_ref());
+        assert_eq!(&data[64..96], fixture.mint_b.as_ref());
+        assert_eq!(u64::from_le_bytes(data[96..104].try_into().unwrap()), AMOUNT_TO_RECEIVE);
+        assert_eq!(u64::from_le_bytes(data[104..112].try_into().unwrap()), AMOUNT_TO_GIVE);
+        let (_, bump) = Pubkey::find_program_address(
+            &[b"escrow", fixture.maker.pubkey().as_ref()],
+            &program_id(),
         );
-        println!("Vault PDA: {}\n", vault);
+        assert_eq!(data[112], bump);
+    }
 
-        // Define program IDs for associated token program, token program, and system program
-        let associated_token_program = ASSOCIATED_TOKEN_PROGRAM_ID.parse::<Pubkey>().unwrap();
-        let token_program = TOKEN_PROGRAM_ID;
-        let system_program = solana_sdk_ids::system_program::ID;
+    struct MadeEscrow {
+        svm: LiteSVM,
+        maker: Keypair,
+        mint_a: Pubkey,
+        mint_b: Pubkey,
+        maker_ata_a: Pubkey,
+        escrow: Pubkey,
+        vault: Pubkey,
+    }
 
-        // Mint 1,000 tokens (with 6 decimal places) of Mint A to the maker's associated token account
-        MintTo::new(&mut svm, &payer, &mint_a, &maker_ata_a, 1000000000)
+    fn make_escrow() -> MadeEscrow {
+        let (mut svm, maker) = setup();
+        let mint_a = CreateMint::new(&mut svm, &maker)
+            .decimals(6)
+            .authority(&maker.pubkey())
+            .send()
+            .unwrap();
+        let mint_b = CreateMint::new(&mut svm, &maker)
+            .decimals(6)
+            .authority(&maker.pubkey())
+            .send()
+            .unwrap();
+        let maker_ata_a = CreateAssociatedTokenAccount::new(&mut svm, &maker, &mint_a)
+            .owner(&maker.pubkey())
+            .send()
+            .unwrap();
+        MintTo::new(&mut svm, &maker, &mint_a, &maker_ata_a, INITIAL_A)
             .send()
             .unwrap();
 
-        let amount_to_receive: u64 = 100000000; // 100 tokens with 6 decimal places
-        let amount_to_give: u64 = 500000000;    // 500 tokens with 6 decimal places
-        let bump: u8 = escrow.1;   // canonical bump; the program derives the same one on-chain
-
-        println!("Bump: {}", bump);
-
-        // Create the "Make" instruction to deposit tokens into the escrow
-        let make_data = [
-            vec![0u8],              // Discriminator for "Make" instruction
-            amount_to_receive.to_le_bytes().to_vec(),
-            amount_to_give.to_le_bytes().to_vec(),
-        ].concat();
+        let (escrow, _) = Pubkey::find_program_address(
+            &[b"escrow", maker.pubkey().as_ref()],
+            &program_id(),
+        );
+        let vault = spl_associated_token_account::get_associated_token_address(&escrow, &mint_a);
         let make_ix = Instruction {
-            program_id: program_id,
+            program_id: program_id(),
             accounts: vec![
-                AccountMeta::new(payer.pubkey(), true),
-                AccountMeta::new(mint_a, false),
-                AccountMeta::new(mint_b, false),
-                AccountMeta::new(escrow.0, false),
+                AccountMeta::new(maker.pubkey(), true),
+                AccountMeta::new_readonly(mint_a, false),
+                AccountMeta::new_readonly(mint_b, false),
+                AccountMeta::new(escrow, false),
                 AccountMeta::new(maker_ata_a, false),
                 AccountMeta::new(vault, false),
-                AccountMeta::new(system_program, false),
-                AccountMeta::new(token_program, false),
-                AccountMeta::new(associated_token_program, false),
+                AccountMeta::new_readonly(solana_sdk_ids::system_program::ID, false),
+                AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
+                AccountMeta::new_readonly(ASSOCIATED_TOKEN_PROGRAM_ID.parse().unwrap(), false),
             ],
-            data: make_data,
+            data: [
+                vec![0u8],
+                AMOUNT_TO_RECEIVE.to_le_bytes().to_vec(),
+                AMOUNT_TO_GIVE.to_le_bytes().to_vec(),
+            ]
+            .concat(),
         };
+        let tx = Transaction::new(
+            &[&maker],
+            Message::new(&[make_ix], Some(&maker.pubkey())),
+            svm.latest_blockhash(),
+        );
+        let meta = svm.send_transaction(tx).expect("Make failed");
+        println!("Make CUs: {}", meta.compute_units_consumed);
 
-        // Create and send the transaction containing the "Make" instruction
-        let message = Message::new(&[make_ix], Some(&payer.pubkey()));
-        let recent_blockhash = svm.latest_blockhash();
+        MadeEscrow {
+            svm,
+            maker,
+            mint_a,
+            mint_b,
+            maker_ata_a,
+            escrow,
+            vault,
+        }
+    }
 
-        let transaction = Transaction::new(&[&payer], message, recent_blockhash);
+    fn token_amount(svm: &LiteSVM, address: &Pubkey) -> u64 {
+        let account = svm.get_account(address).unwrap();
+        spl_token_2022::state::Account::unpack(&account.data)
+            .unwrap()
+            .amount
+    }
 
-        // Send the transaction and capture the result
-        let tx = svm.send_transaction(transaction).unwrap();
+    fn assert_closed(svm: &LiteSVM, address: &Pubkey) {
+        assert!(
+            svm.get_account(address).map_or(true, |account| {
+                account.lamports == 0 && account.owner == solana_sdk_ids::system_program::ID
+            }),
+            "account {address} was not closed"
+        );
+    }
 
-        // Log transaction details
-        println!("\n\nMake transaction successful");
-        println!("CUs Consumed: {}", tx.compute_units_consumed);
+    fn funded_taker(fixture: &mut MadeEscrow, b_amount: u64) -> (Keypair, Pubkey) {
+        let taker = Keypair::new();
+        fixture
+            .svm
+            .airdrop(&taker.pubkey(), 2 * LAMPORTS_PER_SOL)
+            .unwrap();
+        let taker_ata_b = CreateAssociatedTokenAccount::new(
+            &mut fixture.svm,
+            &taker,
+            &fixture.mint_b,
+        )
+        .send()
+        .unwrap();
+        MintTo::new(
+            &mut fixture.svm,
+            &fixture.maker,
+            &fixture.mint_b,
+            &taker_ata_b,
+            b_amount,
+        )
+        .send()
+        .unwrap();
+        (taker, taker_ata_b)
+    }
 
-        // --- extra verification ---
-        let vault_acc = svm.get_account(&vault).unwrap();
-        let vault_state = spl_token_2022::state::Account::unpack(&vault_acc.data).unwrap();
-        println!("Vault owner: {} (escrow PDA? {})", vault_state.owner, vault_state.owner == escrow.0);
-        println!("Vault balance: {}", vault_state.amount);
-        assert_eq!(vault_state.amount, amount_to_give);
+    fn take_instruction(fixture: &MadeEscrow, taker: &Keypair, taker_ata_b: Pubkey) -> Instruction {
+        let taker_ata_a = spl_associated_token_account::get_associated_token_address(
+            &taker.pubkey(),
+            &fixture.mint_a,
+        );
+        let maker_ata_b = spl_associated_token_account::get_associated_token_address(
+            &fixture.maker.pubkey(),
+            &fixture.mint_b,
+        );
+        Instruction {
+            program_id: program_id(),
+            accounts: vec![
+                AccountMeta::new(taker.pubkey(), true),
+                AccountMeta::new(fixture.maker.pubkey(), false),
+                AccountMeta::new_readonly(fixture.mint_a, false),
+                AccountMeta::new_readonly(fixture.mint_b, false),
+                AccountMeta::new(fixture.escrow, false),
+                AccountMeta::new(fixture.vault, false),
+                AccountMeta::new(taker_ata_a, false),
+                AccountMeta::new(taker_ata_b, false),
+                AccountMeta::new(maker_ata_b, false),
+                AccountMeta::new_readonly(solana_sdk_ids::system_program::ID, false),
+                AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
+                AccountMeta::new_readonly(ASSOCIATED_TOKEN_PROGRAM_ID.parse().unwrap(), false),
+            ],
+            data: vec![1u8],
+        }
+    }
 
-        let maker_acc = svm.get_account(&maker_ata_a).unwrap();
-        let maker_state = spl_token_2022::state::Account::unpack(&maker_acc.data).unwrap();
-        println!("Maker ATA balance: {}", maker_state.amount);
-        assert_eq!(maker_state.amount, 1000000000 - amount_to_give);
+    fn cancel_instruction(fixture: &MadeEscrow, caller: Pubkey, signer: bool) -> Instruction {
+        Instruction {
+            program_id: program_id(),
+            accounts: vec![
+                AccountMeta::new(caller, signer),
+                AccountMeta::new_readonly(fixture.mint_a, false),
+                AccountMeta::new(fixture.escrow, false),
+                AccountMeta::new(fixture.vault, false),
+                AccountMeta::new(fixture.maker_ata_a, false),
+                AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
+            ],
+            data: vec![2u8],
+        }
+    }
 
-        let esc = svm.get_account(&escrow.0).unwrap();
-        println!("Escrow account owner: {} (program? {})", esc.owner, esc.owner == program_id);
-        println!("Escrow data len: {}", esc.data.len());
-        let d = &esc.data;
-        println!("  maker   = {}", Pubkey::new_from_array(d[0..32].try_into().unwrap()));
-        println!("  mint_a  = {}", Pubkey::new_from_array(d[32..64].try_into().unwrap()));
-        println!("  mint_b  = {}", Pubkey::new_from_array(d[64..96].try_into().unwrap()));
-        println!("  receive = {}", u64::from_le_bytes(d[96..104].try_into().unwrap()));
-        println!("  give    = {}", u64::from_le_bytes(d[104..112].try_into().unwrap()));
-        println!("  bump    = {}", d[112]);
-        assert_eq!(&d[0..32], payer.pubkey().as_ref());
-        assert_eq!(u64::from_le_bytes(d[96..104].try_into().unwrap()), amount_to_receive);
-        assert_eq!(u64::from_le_bytes(d[104..112].try_into().unwrap()), amount_to_give);
-        assert_eq!(d[112], bump);
+    #[test]
+    fn test_take_instruction() {
+        let mut fixture = make_escrow();
+        let (taker, taker_ata_b) = funded_taker(&mut fixture, AMOUNT_TO_RECEIVE);
+        let taker_ata_a = spl_associated_token_account::get_associated_token_address(
+            &taker.pubkey(),
+            &fixture.mint_a,
+        );
+        let maker_ata_b = spl_associated_token_account::get_associated_token_address(
+            &fixture.maker.pubkey(),
+            &fixture.mint_b,
+        );
+        let maker_balance_before = fixture.svm.get_balance(&fixture.maker.pubkey()).unwrap();
+        let escrow_rent = fixture.svm.get_account(&fixture.escrow).unwrap().lamports;
+        let vault_rent = fixture.svm.get_account(&fixture.vault).unwrap().lamports;
+        let ix = take_instruction(&fixture, &taker, taker_ata_b);
+        let tx = Transaction::new(
+            &[&taker],
+            Message::new(&[ix], Some(&taker.pubkey())),
+            fixture.svm.latest_blockhash(),
+        );
+        let meta = fixture.svm.send_transaction(tx).expect("Take failed");
+        println!("Take CUs: {}", meta.compute_units_consumed);
+
+        assert_eq!(token_amount(&fixture.svm, &taker_ata_a), AMOUNT_TO_GIVE);
+        assert_eq!(token_amount(&fixture.svm, &maker_ata_b), AMOUNT_TO_RECEIVE);
+        assert_closed(&fixture.svm, &fixture.vault);
+        assert_closed(&fixture.svm, &fixture.escrow);
+        assert_eq!(
+            fixture.svm.get_balance(&fixture.maker.pubkey()).unwrap(),
+            maker_balance_before + escrow_rent + vault_rent
+        );
+    }
+
+    #[test]
+    fn test_cancel_instruction() {
+        let mut fixture = make_escrow();
+        let ix = cancel_instruction(&fixture, fixture.maker.pubkey(), true);
+        let tx = Transaction::new(
+            &[&fixture.maker],
+            Message::new(&[ix], Some(&fixture.maker.pubkey())),
+            fixture.svm.latest_blockhash(),
+        );
+        let meta = fixture.svm.send_transaction(tx).expect("Cancel failed");
+        println!("Cancel CUs: {}", meta.compute_units_consumed);
+
+        assert_eq!(token_amount(&fixture.svm, &fixture.maker_ata_a), INITIAL_A);
+        assert_closed(&fixture.svm, &fixture.vault);
+        assert_closed(&fixture.svm, &fixture.escrow);
+    }
+
+    #[test]
+    fn test_take_insufficient_b() {
+        let mut fixture = make_escrow();
+        let (taker, taker_ata_b) = funded_taker(&mut fixture, AMOUNT_TO_RECEIVE / 2);
+        let taker_ata_a = spl_associated_token_account::get_associated_token_address(
+            &taker.pubkey(),
+            &fixture.mint_a,
+        );
+        let maker_ata_b = spl_associated_token_account::get_associated_token_address(
+            &fixture.maker.pubkey(),
+            &fixture.mint_b,
+        );
+        let ix = take_instruction(&fixture, &taker, taker_ata_b);
+        let tx = Transaction::new(
+            &[&taker],
+            Message::new(&[ix], Some(&taker.pubkey())),
+            fixture.svm.latest_blockhash(),
+        );
+        let err = fixture.svm.send_transaction(tx).expect_err("underfunded Take succeeded");
+        println!("Underfunded Take CUs: {}", err.meta.compute_units_consumed);
+        assert_eq!(err.err, TransactionError::InstructionError(0, InstructionError::Custom(1)));
+        assert_eq!(token_amount(&fixture.svm, &fixture.vault), AMOUNT_TO_GIVE);
+        assert_eq!(token_amount(&fixture.svm, &taker_ata_b), AMOUNT_TO_RECEIVE / 2);
+        assert_eq!(token_amount(&fixture.svm, &fixture.maker_ata_a), INITIAL_A - AMOUNT_TO_GIVE);
+        assert!(fixture.svm.get_account(&taker_ata_a).is_none());
+        assert!(fixture.svm.get_account(&maker_ata_b).is_none());
+        assert!(fixture.svm.get_account(&fixture.escrow).is_some());
+    }
+
+    #[test]
+    fn test_cancel_stranger_fails() {
+        let mut fixture = make_escrow();
+        let stranger = Keypair::new();
+        fixture
+            .svm
+            .airdrop(&stranger.pubkey(), LAMPORTS_PER_SOL)
+            .unwrap();
+        let ix = cancel_instruction(&fixture, stranger.pubkey(), true);
+        let tx = Transaction::new(
+            &[&stranger],
+            Message::new(&[ix], Some(&stranger.pubkey())),
+            fixture.svm.latest_blockhash(),
+        );
+        let err = fixture.svm.send_transaction(tx).expect_err("stranger canceled escrow");
+        println!("Stranger Cancel CUs: {}", err.meta.compute_units_consumed);
+        assert_eq!(err.err, TransactionError::InstructionError(0, InstructionError::InvalidAccountData));
+
+        let ix = cancel_instruction(&fixture, fixture.maker.pubkey(), false);
+        let tx = Transaction::new(
+            &[&stranger],
+            Message::new(&[ix], Some(&stranger.pubkey())),
+            fixture.svm.latest_blockhash(),
+        );
+        let err = fixture.svm.send_transaction(tx).expect_err("unsigned maker canceled escrow");
+        println!("Unsigned Cancel CUs: {}", err.meta.compute_units_consumed);
+        assert_eq!(err.err, TransactionError::InstructionError(0, InstructionError::MissingRequiredSignature));
+        assert_eq!(token_amount(&fixture.svm, &fixture.vault), AMOUNT_TO_GIVE);
+        assert!(fixture.svm.get_account(&fixture.escrow).is_some());
     }
 }
